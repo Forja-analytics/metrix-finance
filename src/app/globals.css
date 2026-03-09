@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a0f0d;
+  --foreground: #e8f5e9;
+  --card: #0f1a14;
+  --card-hover: #152a1e;
+  --border: #1e3a2a;
+  --primary: #00d4aa;
+  --primary-hover: #00b894;
+  --secondary: #4ade80;
+  --accent: #22c55e;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --muted: #6b8c7a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-hover: var(--card-hover);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-muted: var(--muted);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Custom scrollbar for webkit browsers */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, #00d4aa 0%, #4ade80 50%, #22c55e 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Card glow effect */
+.card-glow {
+  position: relative;
+}
+
+.card-glow::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(135deg, rgba(0, 212, 170, 0.15), rgba(74, 222, 128, 0.15));
+  border-radius: inherit;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.card-glow:hover::before {
+  opacity: 1;
+}
+
+/* Sophisticated glass effect */
+.glass-card {
+  background: linear-gradient(135deg, rgba(15, 26, 20, 0.9) 0%, rgba(21, 42, 30, 0.8) 100%);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 212, 170, 0.1);
+}
+
+/* Subtle grid pattern background */
+.grid-pattern {
+  background-image:
+    linear-gradient(rgba(0, 212, 170, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 170, 0.03) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+/* Accent glow */
+.glow-accent {
+  box-shadow: 0 0 20px rgba(0, 212, 170, 0.15), 0 0 40px rgba(0, 212, 170, 0.05);
+}

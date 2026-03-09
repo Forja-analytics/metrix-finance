@@ -1,0 +1,52 @@
+{
+  "name": "metrix-finance",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "prisma generate && next build --webpack",
+    "start": "node init-db.js && next start",
+    "lint": "eslint",
+    "init-db": "node init-db.js",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/client": "~6.0.0",
+    "pg": "^8.13.1",
+    "@rainbow-me/rainbowkit": "^2.2.10",
+    "@tanstack/react-query": "^5.90.12",
+    "axios": "^1.13.2",
+    "clsx": "^2.1.1",
+    "graphql": "^16.12.0",
+    "graphql-request": "^7.3.5",
+    "jose": "^5.0.0",
+    "lucide-react": "^0.556.0",
+    "nanoid": "^5.0.0",
+    "next": "^16.1.1",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "recharts": "^3.5.1",
+    "resend": "^4.0.0",
+    "stripe": "^17.0.0",
+    "tailwind-merge": "^3.4.0",
+    "twilio": "^5.0.0",
+    "viem": "^2.41.2",
+    "wagmi": "^2.19.5",
+    "zustand": "^5.0.9"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.0.7",
+    "prisma": "~6.0.0",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  },
+  "optionalDependencies": {
+    "@tailwindcss/oxide-linux-x64-gnu": "^4.1.18",
+    "lightningcss-linux-x64-gnu": "^1.31.1"
+  }
+}

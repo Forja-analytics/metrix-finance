@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: metrix-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: metrix
+      POSTGRES_PASSWORD: metrix_password_123
+      POSTGRES_DB: metrix_finance
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metrix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: metrix-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://metrix:metrix_password_123@postgres:5432/metrix_finance
+      NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID}
+      NEXT_PUBLIC_ALCHEMY_API_KEY: ${NEXT_PUBLIC_ALCHEMY_API_KEY}
+      NEXT_PUBLIC_GRAPH_API_KEY: ${NEXT_PUBLIC_GRAPH_API_KEY}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      JWT_SECRET: ${JWT_SECRET}
+      TOKEN_SALT: ${TOKEN_SALT}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PRO_PRICE_ID: ${STRIPE_PRO_PRICE_ID}
+      STRIPE_ENTERPRISE_PRICE_ID: ${STRIPE_ENTERPRISE_PRICE_ID}
+      NEXT_PUBLIC_STRIPE_PRO_PRICE_ID: ${NEXT_PUBLIC_STRIPE_PRO_PRICE_ID}
+      NEXT_PUBLIC_STRIPE_ENTERPRISE_PRICE_ID: ${NEXT_PUBLIC_STRIPE_ENTERPRISE_PRICE_ID}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: node server.js
+
+volumes:
+  postgres_data:
