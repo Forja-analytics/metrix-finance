@@ -75,6 +75,14 @@ export const FEAR_GREED_LABELS: Record<string, { label: string; color: string }>
   '75-100': { label: 'Extreme Greed', color: '#22c55e' },
 };
 
+// Pool blocklist - these pools should be excluded from all queries and displays
+// ease.org pools are from a different protocol and should not appear in Uniswap-focused views
+export const EXCLUDED_POOL_IDENTIFIERS = [
+  'ease.org/ez-cvxsteCRV',
+  'ease.org/ez-yvCurve-IronBank',
+  'ease.org/ez-SLP-WBTC-WETH',
+];
+
 export function getFearGreedLabel(value: number): { label: string; color: string } {
   if (value <= 25) return FEAR_GREED_LABELS['0-25'];
   if (value <= 45) return FEAR_GREED_LABELS['25-45'];

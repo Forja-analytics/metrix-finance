@@ -13,7 +13,7 @@ import { useStore } from '@/lib/store';
 import { usePositions } from '@/hooks/usePositions';
 import { useTranslation } from '@/hooks/useTranslation';
 import { Position } from '@/types';
-import { Plus, Wallet, TrendingUp, DollarSign, PieChart, RefreshCw, Link2, Search, ChevronDown, Calendar, Bell, X } from 'lucide-react';
+import { Plus, Wallet, TrendingUp, DollarSign, PieChart, RefreshCw, Link2, Search, ChevronDown, Calendar, Bell, X, AlertTriangle } from 'lucide-react';
 import { formatCurrency, formatPercent } from '@/lib/utils';
 import { fetchTokenPrices } from '@/lib/api';
 import { fetchPositionsHistory, PositionHistory } from '@/lib/uniswap-subgraph';
@@ -33,6 +33,7 @@ export default function TrackPage() {
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [positionHistories, setPositionHistories] = useState<Map<string, PositionHistory>>(new Map());
   const [v4PositionHistories, setV4PositionHistories] = useState<Map<string, V4PositionHistory>>(new Map());
+  const [historyFetchStatus, setHistoryFetchStatus] = useState<{ v3Success: boolean | null; v4Success: boolean | null; error?: string }>({ v3Success: null, v4Success: null });
 
   // Fetch token prices periodically
   useEffect(() => {
@@ -57,7 +58,7 @@ export default function TrackPage() {
     const fetchV3Histories = async () => {
       if (v3Positions.length === 0) {
         setPositionHistories(new Map());
-        return;
+        return true;
       }
 
       // Group V3 positions by chain for batch fetching
@@ -71,20 +72,26 @@ export default function TrackPage() {
       });
 
       const allHistories = new Map<string, PositionHistory>();
+      let anySuccess = false;
+      let lastError = '';
       for (const [chainId, tokenIds] of positionsByChain) {
-        const histories = await fetchPositionsHistory(tokenIds, chainId);
-        histories.forEach((history, tokenId) => {
+        const result = await fetchPositionsHistory(tokenIds, chainId);
+        if (result.success) anySuccess = true;
+        if (result.error) lastError = result.error;
+        result.data.forEach((history, tokenId) => {
           allHistories.set(tokenId, history);
         });
       }
       setPositionHistories(allHistories);
+      setHistoryFetchStatus(prev => ({ ...prev, v3Success: anySuccess, error: anySuccess ? prev.error : lastError }));
+      return anySuccess;
     };
 
     // Fetch V4 histories from V4 subgraph (ModifyLiquidity events)
     const fetchV4Histories = async () => {
       if (v4Positions.length === 0) {
         setV4PositionHistories(new Map());
-        return;
+        return true;
       }
 
       const tokenIds = v4Positions.map(pos => pos.tokenId.toString());
@@ -94,8 +101,10 @@ export default function TrackPage() {
         tickLower: pos.tickLower,
         tickUpper: pos.tickUpper,
       }));
-      const histories = await fetchV4PositionsHistory(tokenIds, address, positionsWithTicks);
-      setV4PositionHistories(histories);
+      const result = await fetchV4PositionsHistory(tokenIds, address, positionsWithTicks);
+      setV4PositionHistories(result.data);
+      setHistoryFetchStatus(prev => ({ ...prev, v4Success: result.success, error: result.success ? prev.error : (result.error || prev.error) }));
+      return result.success;
     };
 
     // Fetch both in parallel
@@ -266,6 +275,12 @@ export default function TrackPage() {
   const totalValue = walletPositionsTotals.totalValue + manualTotalValue;
   const totalOriginalInvestment = walletPositionsTotals.totalOriginalInvestment + manualTotalDeposits;
   const totalHodlValue = walletPositionsTotals.totalHodlValue + manualTotalDeposits;
+
+  // Detect if historical earnings data is missing (subgraph unavailable)
+  const historyDataMissing = walletPositions.length > 0 && (
+    (historyFetchStatus.v3Success === false && walletPositions.some(p => p.version !== 'v4')) ||
+    (historyFetchStatus.v4Success === false && walletPositions.some(p => p.version === 'v4'))
+  );
 
   // Earnings breakdown with real claimed fees from The Graph
   const unclaimedFees = walletPositionsTotals.totalUnclaimedFees + manualTotalFees;
@@ -508,9 +523,20 @@ export default function TrackPage() {
           </Card>
 
           {/* Earnings */}
-          <Card className="p-4 border-l-2 border-l-primary">
-            <p className="text-sm text-muted mb-2">Earnings</p>
+          <Card className={`p-4 border-l-2 ${historyDataMissing ? 'border-l-yellow-500' : 'border-l-primary'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm text-muted">Earnings</p>
+              {historyDataMissing && (
+                <span className="flex items-center gap-1 text-xs text-yellow-400" title={historyFetchStatus.error || 'Historical earnings data unavailable — claimed fees may be incomplete'}>
+                  <AlertTriangle className="w-3 h-3" />
+                  Partial data
+                </span>
+              )}
+            </div>
             <p className="text-2xl font-bold text-success">{formatCurrency(totalEarnings)}</p>
+            {historyDataMissing && (
+              <p className="text-xs text-yellow-400/80 mt-1">Claimed fees may be missing — subgraph unavailable</p>
+            )}
             <div className="flex gap-4 mt-3 text-xs">
               <div>
                 <p className="text-muted">Unclaimed</p>
@@ -518,7 +544,7 @@ export default function TrackPage() {
               </div>
               <div>
                 <p className="text-muted">Claimed</p>
-                <p className="font-medium">{formatCurrency(claimedFees)}</p>
+                <p className={`font-medium ${historyDataMissing && claimedFees === 0 ? 'text-yellow-400/60' : ''}`}>{formatCurrency(claimedFees)}{historyDataMissing && claimedFees === 0 ? ' ⚠' : ''}</p>
               </div>
               <div>
                 <p className="text-muted">Retention</p>

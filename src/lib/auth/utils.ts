@@ -53,6 +53,19 @@ export async function deleteSession(request: NextRequest) {
   await prisma.session.deleteMany({ where: { sessionToken: hashedToken } });
 }
 
+// Check if the session belongs to an admin user
+export async function getSessionWithRole(request: NextRequest) {
+  const session = await getSession(request);
+  if (!session) return null;
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { id: true, role: true },
+  });
+
+  return user ? { ...session, role: user.role } : null;
+}
+
 export function setSessionCookie(response: NextResponse, sessionToken: string) {
   response.cookies.set('session', sessionToken, {
     httpOnly: true,

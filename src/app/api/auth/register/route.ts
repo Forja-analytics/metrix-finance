@@ -63,6 +63,7 @@ export async function POST(request: NextRequest) {
         email: user.email,
         name: user.name,
         phone: user.phone,
+        role: user.role,
         subscription: { status: 'free', currentPeriodEnd: null },
       },
     });

@@ -1,6 +1,7 @@
 'use client';
 
 import { Pool } from '@/types';
+import { EXCLUDED_POOL_IDENTIFIERS } from '@/lib/constants';
 
 // The Graph Gateway API Key (free tier available at https://thegraph.com/studio/)
 const GRAPH_API_KEY = process.env.NEXT_PUBLIC_GRAPH_API_KEY || '';
@@ -181,23 +182,30 @@ export async function fetchPositionHistory(
   }
 }
 
+// Result type that includes fetch status for UI error surfacing
+export interface PositionsHistoryResult {
+  data: Map<string, PositionHistory>;
+  success: boolean;
+  error?: string;
+}
+
 // Batch fetch position histories for multiple positions
 export async function fetchPositionsHistory(
   tokenIds: string[],
   chainId: number = 1
-): Promise<Map<string, PositionHistory>> {
+): Promise<PositionsHistoryResult> {
   const results = new Map<string, PositionHistory>();
 
   const network = CHAIN_ID_TO_NETWORK[chainId];
   if (!network) {
     console.warn(`No subgraph for chain ID: ${chainId}`);
-    return results;
+    return { data: results, success: false, error: `No subgraph for chain ID: ${chainId}` };
   }
 
   const subgraphUrl = getSubgraphUrl(network);
   if (!subgraphUrl) {
-    console.warn(`No subgraph URL for network: ${network}`);
-    return results;
+    console.warn(`No subgraph URL for network: ${network}. Set NEXT_PUBLIC_GRAPH_API_KEY to enable historical earnings.`);
+    return { data: results, success: false, error: 'Missing Graph API key — historical earnings (claimed fees) unavailable' };
   }
 
   try {
@@ -226,7 +234,7 @@ export async function fetchPositionsHistory(
 
     if (positionsData.errors) {
       console.warn('Positions history query failed:', positionsData.errors[0]?.message);
-      return results;
+      return { data: results, success: false, error: `Subgraph query failed: ${positionsData.errors[0]?.message}` };
     }
 
     const positions = positionsData.data?.positions || [];
@@ -259,10 +267,10 @@ export async function fetchPositionsHistory(
       });
     }
 
-    return results;
+    return { data: results, success: true };
   } catch (error) {
     console.error('Error fetching positions history:', error);
-    return results;
+    return { data: results, success: false, error: `Network error: ${error instanceof Error ? error.message : 'unknown'}` };
   }
 }
 
@@ -732,7 +740,15 @@ export async function fetchUniswapPools(
       return generateMockPools(network, first);
     }
 
-    return subgraphPools.map(pool => convertSubgraphPool(pool, network, ethPrice));
+    const pools = subgraphPools.map(pool => convertSubgraphPool(pool, network, ethPrice));
+
+    // Filter out excluded pools (e.g. ease.org pools from other protocols)
+    return pools.filter(pool => {
+      const poolIdentifier = pool.id.toLowerCase();
+      return !EXCLUDED_POOL_IDENTIFIERS.some(excluded =>
+        poolIdentifier.includes(excluded.toLowerCase())
+      );
+    });
   } catch {
     // Subgraph unavailable, use mock data silently
     return generateMockPools(network, first);

@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
         email: user.email,
         name: user.name,
         phone: user.phone,
+        role: user.role,
         subscription: {
           status: user.subscription?.status || 'free',
           currentPeriodEnd: user.subscription?.currentPeriodEnd,

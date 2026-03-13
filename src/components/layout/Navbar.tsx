@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Search, Menu, X, LogOut, User } from 'lucide-react';
+import { Search, Menu, X, LogOut, User, Shield } from 'lucide-react';
 import { useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { Button } from '@/components/ui/Button';
@@ -18,7 +18,7 @@ export function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const { isPro, setAuthModalOpen } = useStore();
-  const { user, isAuthenticated, logout, isInitialized } = useAuth();
+  const { user, isAuthenticated, isAdmin, logout, isInitialized } = useAuth();
   const t = useTranslation();
 
   const navLinks = [
@@ -82,6 +82,16 @@ export function Navbar() {
               />
             </div>
 
+            {isAdmin && (
+              <Link
+                href="/admin"
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 rounded-full border border-primary/30 hover:bg-primary/20 transition-colors"
+              >
+                <Shield className="w-3 h-3 text-primary" />
+                <span className="text-xs font-medium text-primary">Admin</span>
+              </Link>
+            )}
+
             {isPro && (
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-primary/20 to-accent/20 rounded-full border border-primary/30 glow-accent">
                 <span className="text-xs font-medium text-primary">{t('pro')}</span>
@@ -117,7 +127,22 @@ export function Navbar() {
                             <p className="text-sm font-medium truncate">
                               {user?.email || user?.phone}
                             </p>
+                            {isAdmin && (
+                              <span className="inline-flex items-center gap-1 mt-1 text-xs text-primary">
+                                <Shield className="w-3 h-3" /> Admin
+                              </span>
+                            )}
                           </div>
+                          {isAdmin && (
+                            <Link
+                              href="/admin"
+                              onClick={() => setUserMenuOpen(false)}
+                              className="w-full px-3 py-2 text-left text-sm text-muted hover:text-foreground hover:bg-background flex items-center gap-2"
+                            >
+                              <Shield className="w-4 h-4" />
+                              Admin Panel
+                            </Link>
+                          )}
                           <button
                             onClick={() => {
                               logout();
@@ -204,16 +229,28 @@ export function Navbar() {
               </Button>
             )}
             {isInitialized && isAuthenticated && (
-              <button
-                onClick={() => {
-                  logout();
-                  setMobileMenuOpen(false);
-                }}
-                className="w-full px-4 py-2 text-sm text-muted hover:text-foreground flex items-center gap-2"
-              >
-                <LogOut className="w-4 h-4" />
-                Sign out ({user?.email || user?.phone})
-              </button>
+              <>
+                {isAdmin && (
+                  <Link
+                    href="/admin"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="w-full px-4 py-2 text-sm text-primary hover:text-foreground flex items-center gap-2"
+                  >
+                    <Shield className="w-4 h-4" />
+                    Admin Panel
+                  </Link>
+                )}
+                <button
+                  onClick={() => {
+                    logout();
+                    setMobileMenuOpen(false);
+                  }}
+                  className="w-full px-4 py-2 text-sm text-muted hover:text-foreground flex items-center gap-2"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Sign out ({user?.email || user?.phone})
+                </button>
+              </>
             )}
           </div>
         </div>

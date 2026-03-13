@@ -454,6 +454,10 @@ async function fetchModifyLiquidityEvents(
 }
 
 // Calculate deposits and claims from ModifyLiquidity events for a specific tick range
+// IMPORTANT: In V4, ModifyLiquidity events represent both liquidity changes AND fee claims.
+// When `amount` (liquidityDelta) is 0 but amount0/amount1 are non-zero, this is a pure fee collection.
+// When `amount` is negative, tokens are withdrawn (liquidity removal + any accumulated fees).
+// We separate fee claims from liquidity withdrawals to avoid inflating "claimed fees" with principal.
 function calculateDepositsAndClaims(
   events: ModifyLiquidityEvent[],
   tickLower: number,
@@ -470,21 +474,52 @@ function calculateDepositsAndClaims(
     (e) => parseInt(e.tickLower) === tickLower && parseInt(e.tickUpper) === tickUpper
   );
 
+  // Track total deposited tokens to distinguish withdrawal of principal vs fee claims
+  let cumulativeDeposited0 = 0;
+  let cumulativeDeposited1 = 0;
+  let cumulativeWithdrawn0 = 0;
+  let cumulativeWithdrawn1 = 0;
+
   for (const event of matchingEvents) {
     const amount0 = parseFloat(event.amount0);
     const amount1 = parseFloat(event.amount1);
+    const liquidityDelta = parseFloat(event.amount); // The liquidity change
     const amountUSD = parseFloat(event.amountUSD || '0') || 0;
 
-    // Positive amounts = deposits, negative = withdrawals
-    if (amount0 > 0 || amount1 > 0) {
-      // This is a deposit event
-      depositedToken0 += Math.max(0, amount0);
-      depositedToken1 += Math.max(0, amount1);
-      depositedUSD += Math.abs(amountUSD); // Track USD value at deposit time
-    } else {
-      // This is a withdrawal/claim event
+    if (liquidityDelta === 0 && (amount0 !== 0 || amount1 !== 0)) {
+      // Pure fee collection event: liquidity unchanged but tokens moved
+      // All tokens in this event are claimed fees
       claimedToken0 += Math.abs(amount0);
       claimedToken1 += Math.abs(amount1);
+    } else if (amount0 > 0 || amount1 > 0) {
+      // Deposit event: adding liquidity
+      depositedToken0 += Math.max(0, amount0);
+      depositedToken1 += Math.max(0, amount1);
+      cumulativeDeposited0 += Math.max(0, amount0);
+      cumulativeDeposited1 += Math.max(0, amount1);
+      depositedUSD += Math.abs(amountUSD);
+    } else if (amount0 < 0 || amount1 < 0) {
+      // Withdrawal event: removing liquidity
+      // The withdrawn amount may include fees on top of principal
+      const withdrawn0 = Math.abs(amount0);
+      const withdrawn1 = Math.abs(amount1);
+
+      // Estimate how much of the withdrawal is principal vs fees
+      // Principal portion: proportional to remaining deposited amount
+      const remainingDeposit0 = Math.max(0, cumulativeDeposited0 - cumulativeWithdrawn0);
+      const remainingDeposit1 = Math.max(0, cumulativeDeposited1 - cumulativeWithdrawn1);
+
+      const principalPortion0 = Math.min(withdrawn0, remainingDeposit0);
+      const principalPortion1 = Math.min(withdrawn1, remainingDeposit1);
+
+      // Anything beyond the principal is claimed fees
+      const feePortion0 = Math.max(0, withdrawn0 - principalPortion0);
+      const feePortion1 = Math.max(0, withdrawn1 - principalPortion1);
+
+      claimedToken0 += feePortion0;
+      claimedToken1 += feePortion1;
+      cumulativeWithdrawn0 += principalPortion0;
+      cumulativeWithdrawn1 += principalPortion1;
     }
   }
 
@@ -514,12 +549,19 @@ async function fetchV4PositionCreatedFromSubgraph(tokenId: string): Promise<numb
   return null;
 }
 
+// Result type that includes fetch status for UI error surfacing
+export interface V4PositionsHistoryResult {
+  data: Map<string, V4PositionHistory>;
+  success: boolean;
+  error?: string;
+}
+
 // Batch fetch V4 position histories with deposits and claims
 export async function fetchV4PositionsHistory(
   tokenIds: string[],
   ownerAddress: string,
   positions?: Array<{ tokenId: string; tickLower: number; tickUpper: number }>
-): Promise<Map<string, V4PositionHistory>> {
+): Promise<V4PositionsHistoryResult> {
   const results = new Map<string, V4PositionHistory>();
 
   try {
@@ -638,10 +680,10 @@ export async function fetchV4PositionsHistory(
     }
 
     console.log(`Found history for ${results.size} V4 positions`);
-    return results;
+    return { data: results, success: results.size > 0 };
   } catch (error) {
     console.error('Error fetching V4 positions history:', error);
-    return results;
+    return { data: results, success: false, error: `V4 history fetch failed: ${error instanceof Error ? error.message : 'unknown'}` };
   }
 }
 

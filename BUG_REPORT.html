@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bug Report — Principia Metrics: Track Page Earnings &amp; Pool Filtering</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface-2: #242836;
+      --border: #2e3348;
+      --text: #e2e4ed;
+      --text-muted: #8b8fa3;
+      --primary: #6366f1;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #eab308;
+      --orange: #f97316;
+      --cyan: #06b6d4;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      padding: 2rem;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    .report-header {
+      border-bottom: 2px solid var(--primary);
+      padding-bottom: 1.5rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .report-header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 1rem;
+    }
+
+    .meta-row {
+      display: flex;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+    }
+
+    .meta-label {
+      color: var(--text-muted);
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.6rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .badge-fixed { background: rgba(34,197,94,0.15); color: var(--green); border: 1px solid rgba(34,197,94,0.3); }
+    .badge-high { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+    .badge-na { background: rgba(139,143,163,0.15); color: var(--text-muted); border: 1px solid rgba(139,143,163,0.3); }
+    .badge-confirmed { background: rgba(234,179,8,0.15); color: var(--yellow); border: 1px solid rgba(234,179,8,0.3); }
+
+    /* Sections */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .section h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .section h2 .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.75rem;
+      height: 1.75rem;
+      background: var(--primary);
+      color: #fff;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .section h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--cyan);
+      margin: 1.25rem 0 0.75rem;
+    }
+
+    p { margin-bottom: 0.75rem; }
+
+    strong { color: #fff; }
+
+    /* Verdict box */
+    .verdict {
+      background: var(--surface-2);
+      border-left: 3px solid var(--yellow);
+      padding: 1rem 1.25rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+      font-size: 0.95rem;
+    }
+
+    .verdict-green {
+      border-left-color: var(--green);
+    }
+
+    /* Lists */
+    ul, ol {
+      padding-left: 1.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    li {
+      margin-bottom: 0.35rem;
+    }
+
+    li strong {
+      color: var(--cyan);
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      font-size: 0.875rem;
+    }
+
+    th {
+      background: var(--surface-2);
+      color: var(--text-muted);
+      text-align: left;
+      padding: 0.6rem 0.75rem;
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    td.warn { color: var(--red); font-weight: 600; }
+
+    /* Code */
+    code {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      background: var(--surface-2);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      color: var(--cyan);
+    }
+
+    pre {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      overflow-x: auto;
+      margin: 1rem 0;
+      font-size: 0.8rem;
+      line-height: 1.6;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      color: var(--text);
+    }
+
+    .keyword { color: #c792ea; }
+    .string { color: #c3e88d; }
+    .comment { color: #546e7a; }
+    .type { color: #ffcb6b; }
+
+    /* Fix cards */
+    .fix-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin: 1rem 0;
+    }
+
+    .fix-card h4 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--green);
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .fix-card p, .fix-card ul {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+
+    .fix-card ul li { color: var(--text); }
+
+    /* Pool list */
+    .pool-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .pool-list li {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      margin-bottom: 0.4rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--orange);
+    }
+
+    /* Verification */
+    .verify-step {
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-start;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .verify-step:last-child { border-bottom: none; }
+
+    .verify-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.5rem;
+      height: 1.5rem;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      margin-top: 0.1rem;
+    }
+
+    .verify-text {
+      font-size: 0.875rem;
+    }
+
+    /* Footer */
+    .report-footer {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      margin-top: 2.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      body { padding: 1rem; }
+      .section { padding: 1.25rem; }
+      .meta-row { gap: 1rem; }
+      table { font-size: 0.8rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="report-header">
+    <h1>Bug Report: Track Page Earnings &amp; Pool Filtering</h1>
+    <div class="meta-row">
+      <div class="meta-item">
+        <span class="meta-label">Date:</span>
+        <strong>2026-03-13</strong>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Status:</span>
+        <span class="badge badge-fixed">INVESTIGATED &amp; FIXED</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Severity:</span>
+        <span class="badge badge-high">HIGH</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Project:</span>
+        <strong>Principia Metrics</strong>
+      </div>
+    </div>
+  </header>
+
+  <!-- 1. Summary -->
+  <section class="section">
+    <h2><span class="num">1</span> Summary</h2>
+    <p>The team reported two issues:</p>
+    <ol>
+      <li>Three ease.org pools need to be filtered from the app</li>
+      <li>The Earnings box in Track shows only "current earnings", not "historical earnings"</li>
+    </ol>
+    <div class="verdict">
+      <strong>Verdict:</strong> The earnings bug is <span class="badge badge-confirmed">REAL BUT CONDITIONAL</span> &mdash; it manifests when The Graph subgraph is unavailable. The pool filtering issue is <span class="badge badge-na">NOT APPLICABLE</span> to this codebase (ease.org pools are from a different protocol).
+    </div>
+  </section>
+
+  <!-- 2. Bug #1 -->
+  <section class="section">
+    <h2><span class="num">2</span> Bug #1: Earnings Box Shows Only Current Data</h2>
+
+    <h3>Root Cause</h3>
+    <p>The earnings calculation in <code>src/app/track/page.tsx</code> (lines 279-286) computes:</p>
+    <pre><code>totalEarnings = unclaimedFees + claimedFees</code></pre>
+    <p>Where:</p>
+    <ul>
+      <li><strong>unclaimedFees</strong> = on-chain contract state (always available)</li>
+      <li><strong>claimedFees</strong> = historical data from The Graph subgraph (requires API key)</li>
+    </ul>
+    <div class="verdict">
+      <strong>The problem:</strong> When the subgraph is unavailable (missing <code>NEXT_PUBLIC_GRAPH_API_KEY</code>, rate limited, or down), <code>claimedFees</code> silently defaults to <code>$0.00</code>. The UI shows this as if it's the real value &mdash; no error, no warning.
+    </div>
+
+    <h3>Impact</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Expected</th>
+          <th>When Bug Manifests</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Unclaimed</td>
+          <td>Correct</td>
+          <td>Correct</td>
+        </tr>
+        <tr>
+          <td>Claimed</td>
+          <td>Historical total from subgraph</td>
+          <td class="warn">$0.00</td>
+        </tr>
+        <tr>
+          <td>Total Earnings</td>
+          <td>Unclaimed + Claimed</td>
+          <td class="warn">Only unclaimed (understated)</td>
+        </tr>
+        <tr>
+          <td>Retention</td>
+          <td>Meaningful %</td>
+          <td class="warn">Always 100% (meaningless)</td>
+        </tr>
+        <tr>
+          <td>P&amp;L</td>
+          <td>Complete</td>
+          <td class="warn">Missing claimed fees component</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Files Involved</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>What Was Wrong</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>src/lib/uniswap-subgraph.ts</code> &rarr; <code>fetchPositionsHistory()</code></td>
+          <td>Returned empty Map on failure with no status indicator</td>
+        </tr>
+        <tr>
+          <td><code>src/lib/v4-subgraph.ts</code> &rarr; <code>fetchV4PositionsHistory()</code></td>
+          <td>Same &mdash; silent failure</td>
+        </tr>
+        <tr>
+          <td><code>src/lib/v4-subgraph.ts</code> &rarr; <code>calculateDepositsAndClaims()</code></td>
+          <td>Conflated liquidity withdrawals with fee claims</td>
+        </tr>
+        <tr>
+          <td><code>src/app/track/page.tsx</code> &rarr; Earnings card</td>
+          <td>No UI indication when data is partial</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Fixes Applied</h3>
+
+    <div class="fix-card">
+      <h4>&#x2705; Fix 1: Subgraph functions now return fetch status</h4>
+      <p>Files: <code>uniswap-subgraph.ts</code>, <code>v4-subgraph.ts</code></p>
+      <p>Both <code>fetchPositionsHistory()</code> and <code>fetchV4PositionsHistory()</code> now return:</p>
+      <pre><code>{ <span class="type">data</span>: Map&lt;<span class="type">string</span>, History&gt;, <span class="type">success</span>: <span class="keyword">boolean</span>, <span class="type">error</span>?: <span class="keyword">string</span> }</code></pre>
+      <p>Instead of just <code>Map&lt;string, History&gt;</code>. This lets the UI know when historical data failed to load.</p>
+    </div>
+
+    <div class="fix-card">
+      <h4>&#x2705; Fix 2: Earnings card shows warning when data is incomplete</h4>
+      <p>File: <code>track/page.tsx</code></p>
+      <ul>
+        <li>Added <code>historyFetchStatus</code> state to track subgraph fetch results</li>
+        <li>Added <code>historyDataMissing</code> derived boolean</li>
+        <li>Earnings card now shows:
+          <ul>
+            <li>Yellow border instead of primary when data is missing</li>
+            <li>"Partial data" warning badge with AlertTriangle icon</li>
+            <li>Explanatory text: "Claimed fees may be missing &mdash; subgraph unavailable"</li>
+            <li>Warning indicator on the Claimed value when it's $0.00 due to missing data</li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+
+    <div class="fix-card">
+      <h4>&#x2705; Fix 3: V4 claimed fees calculation improved</h4>
+      <p>File: <code>v4-subgraph.ts</code></p>
+      <p>The <code>calculateDepositsAndClaims()</code> function previously treated ALL negative ModifyLiquidity amounts as "claimed fees". This is wrong because liquidity withdrawals also produce negative amounts.</p>
+      <p><strong>New logic:</strong></p>
+      <ul>
+        <li><code>liquidityDelta === 0</code> with token movement = pure fee collection</li>
+        <li><code>liquidityDelta &gt; 0</code> = deposit</li>
+        <li><code>liquidityDelta &lt; 0</code> = withdrawal &mdash; separates principal return from fee portion by tracking cumulative deposits vs withdrawals</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 3. Bug #2 -->
+  <section class="section">
+    <h2><span class="num">3</span> Bug #2: Pool Filtering (ease.org pools)</h2>
+
+    <h3>Finding: <span class="badge badge-na">NOT APPLICABLE</span></h3>
+
+    <p>The three pools reported:</p>
+    <ul class="pool-list">
+      <li>ease.org/ez-cvxsteCRV</li>
+      <li>ease.org/ez-yvCurve-IronBank</li>
+      <li>ease.org/ez-SLP-WBTC-WETH</li>
+    </ul>
+    <p>These are from the <strong>Ease/Cover Protocol</strong> (DeFi insurance), NOT Uniswap. This application exclusively queries Uniswap V3/V4 subgraphs &mdash; these pools cannot appear in the current app.</p>
+
+    <h3>Preventive Fix Applied</h3>
+    <p>Added a pool blocklist in <code>src/lib/constants.ts</code> (<code>EXCLUDED_POOL_IDENTIFIERS</code>) and filtering in <code>src/lib/uniswap-subgraph.ts</code> &rarr; <code>fetchUniswapPools()</code>. This ensures these pools are excluded if they ever appear through a future multi-protocol integration.</p>
+  </section>
+
+  <!-- 4. Files Modified -->
+  <section class="section">
+    <h2><span class="num">4</span> Files Modified</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Change</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>src/lib/constants.ts</code></td>
+          <td>Added <code>EXCLUDED_POOL_IDENTIFIERS</code> blocklist</td>
+        </tr>
+        <tr>
+          <td><code>src/lib/uniswap-subgraph.ts</code></td>
+          <td>Added <code>PositionsHistoryResult</code> type, updated <code>fetchPositionsHistory()</code> to return status, added pool filtering</td>
+        </tr>
+        <tr>
+          <td><code>src/lib/v4-subgraph.ts</code></td>
+          <td>Added <code>V4PositionsHistoryResult</code> type, updated <code>fetchV4PositionsHistory()</code> to return status, fixed <code>calculateDepositsAndClaims()</code></td>
+        </tr>
+        <tr>
+          <td><code>src/app/track/page.tsx</code></td>
+          <td>Added <code>historyFetchStatus</code> state, <code>historyDataMissing</code> check, updated Earnings card with warning UI</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 5. Correct Approach -->
+  <section class="section">
+    <h2><span class="num">5</span> Correct Approach for Historical Earnings</h2>
+    <p>The correct approach (which this app already implements architecturally) is:</p>
+    <pre><code>Total Earnings = Unclaimed Fees <span class="comment">(on-chain)</span> + Claimed Fees <span class="comment">(historical)</span></code></pre>
+    <ul>
+      <li><strong>Unclaimed:</strong> Read from pool contract via fee growth math (Q128 precision)</li>
+      <li><strong>Claimed (V3):</strong> Query <code>collectedFeesToken0/1</code> from Uniswap V3 subgraph &mdash; these are cumulative totals</li>
+      <li><strong>Claimed (V4):</strong> Analyze <code>ModifyLiquidity</code> events, distinguishing fee collections from liquidity removals</li>
+      <li><strong>Retention:</strong> <code>(Unclaimed / Total) * 100</code> &mdash; only meaningful when both data sources are available</li>
+    </ul>
+    <div class="verdict verdict-green">
+      The fix ensures users are <strong>warned</strong> when the historical component is missing, rather than seeing silently incorrect data.
+    </div>
+  </section>
+
+  <!-- 6. Verification -->
+  <section class="section">
+    <h2><span class="num">6</span> Verification Steps</h2>
+    <div class="verify-step">
+      <span class="verify-num">1</span>
+      <div class="verify-text">
+        <strong>With valid API key:</strong> Connect wallet &rarr; Earnings should show both unclaimed and claimed values, no warning badge.
+      </div>
+    </div>
+    <div class="verify-step">
+      <span class="verify-num">2</span>
+      <div class="verify-text">
+        <strong>Without API key:</strong> Remove <code>NEXT_PUBLIC_GRAPH_API_KEY</code> &rarr; Earnings card should show yellow warning: "Partial data" + "Claimed fees may be missing".
+      </div>
+    </div>
+    <div class="verify-step">
+      <span class="verify-num">3</span>
+      <div class="verify-text">
+        <strong>Pool filtering:</strong> Add an ease.org pool ID to a mock response &rarr; verify it's filtered out.
+      </div>
+    </div>
+    <div class="verify-step">
+      <span class="verify-num">4</span>
+      <div class="verify-text">
+        <strong>V4 claims:</strong> Compare claimed fees with Etherscan Collect events for a known V4 position.
+      </div>
+    </div>
+  </section>
+
+  <footer class="report-footer">
+    Principia Metrics &mdash; Bug Report &mdash; Generated 2026-03-13
+  </footer>
+
+</body>
+</html>

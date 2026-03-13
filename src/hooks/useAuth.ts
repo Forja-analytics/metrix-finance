@@ -8,6 +8,7 @@ interface User {
   email: string | null;
   name: string | null;
   phone: string | null;
+  role: 'user' | 'admin';
   subscription: {
     status: 'free' | 'pro' | 'enterprise' | 'canceled';
     currentPeriodEnd: string | null;
@@ -218,6 +219,7 @@ export function useAuth() {
     isLoading,
     isInitialized,
     isAuthenticated: !!user,
+    isAdmin: user?.role === 'admin',
     isPro: user?.subscription?.status === 'pro' || user?.subscription?.status === 'enterprise',
     subscriptionStatus: user?.subscription?.status || 'free',
     login,
