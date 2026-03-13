@@ -54,7 +54,7 @@ export default function TrackPage() {
     const v3Positions = walletPositions.filter(pos => pos.version !== 'v4');
     const v4Positions = walletPositions.filter(pos => pos.version === 'v4');
 
-    // Fetch V3 histories from The Graph
+    // Fetch V3 histories via server-side API route (ensures Graph API key is available)
     const fetchV3Histories = async () => {
       if (v3Positions.length === 0) {
         setPositionHistories(new Map());
@@ -74,14 +74,33 @@ export default function TrackPage() {
       const allHistories = new Map<string, PositionHistory>();
       let anySuccess = false;
       let lastError = '';
+
       for (const [chainId, tokenIds] of positionsByChain) {
-        const result = await fetchPositionsHistory(tokenIds, chainId);
-        if (result.success) anySuccess = true;
-        if (result.error) lastError = result.error;
-        result.data.forEach((history, tokenId) => {
-          allHistories.set(tokenId, history);
-        });
+        try {
+          // Use server-side API route to fetch from subgraph (env vars always available)
+          const res = await fetch(`/api/positions-history?tokenIds=${tokenIds.join(',')}&chainId=${chainId}`);
+          const data = await res.json();
+
+          if (data.success && data.positions) {
+            anySuccess = true;
+            for (const [tokenId, history] of Object.entries(data.positions)) {
+              allHistories.set(tokenId, history as PositionHistory);
+            }
+          } else if (data.error) {
+            lastError = data.error;
+          }
+        } catch (err) {
+          lastError = `Network error: ${err instanceof Error ? err.message : 'unknown'}`;
+          // Fallback: try direct client-side fetch
+          const result = await fetchPositionsHistory(tokenIds, chainId);
+          if (result.success) anySuccess = true;
+          if (result.error) lastError = result.error;
+          result.data.forEach((history, tokenId) => {
+            allHistories.set(tokenId, history);
+          });
+        }
       }
+
       setPositionHistories(allHistories);
       setHistoryFetchStatus(prev => ({ ...prev, v3Success: anySuccess, error: anySuccess ? prev.error : lastError }));
       return anySuccess;
