@@ -93,7 +93,7 @@ export default function PoolSelectionView({ onPoolSelect }: PoolSelectionViewPro
   };
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
       {/* ---- Header Row ---- */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
@@ -133,16 +133,20 @@ export default function PoolSelectionView({ onPoolSelect }: PoolSelectionViewPro
 
       {/* ---- Market Metrics (4 cards) ---- */}
       {marketData && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <SimMetricCard
             label="DeFi Market Cap"
             value={formatCurrency(marketData.defiMarketCap, true)}
             change={marketData.defiMarketCapChange}
+            subtitle={`Crypto Market Cap`}
+            subtitleValue={formatCurrency(marketData.cryptoMarketCap, true)}
           />
           <SimMetricCard
             label="DeFi Volume (24h)"
             value={formatCurrency(marketData.defiVolume24h, true)}
             change={marketData.defiVolumeChange}
+            subtitle="Crypto Volume (24h)"
+            subtitleValue={formatCurrency(marketData.cryptoVolume24h, true)}
           />
           <FearGreedMini value={marketData.fearGreedIndex} />
           <AltcoinMini value={marketData.altcoinSeasonIndex} />
@@ -150,7 +154,7 @@ export default function PoolSelectionView({ onPoolSelect }: PoolSelectionViewPro
       )}
 
       {/* ---- Two-Column Layout ---- */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4">
         {/* Left: Pool Selection */}
         <Card className="p-0 overflow-hidden">
           <div className="border-b border-border px-5 pt-4 pb-0">
@@ -514,19 +518,22 @@ function SimMetricCard({
   label,
   value,
   change,
+  subtitle,
+  subtitleValue,
 }: {
   label: string;
   value: string;
   change?: number;
+  subtitle?: string;
+  subtitleValue?: string;
 }) {
   const isPositive = change !== undefined && change > 0;
   const isNegative = change !== undefined && change < 0;
 
   return (
-    <Card className="p-3">
-      <span className="text-xs text-muted">{label}</span>
-      <div className="flex items-end justify-between mt-1">
-        <span className="text-lg font-semibold">{value}</span>
+    <Card className="p-4">
+      <div className="flex items-start justify-between">
+        <span className="text-xs text-muted">{label}</span>
         {change !== undefined && (
           <span
             className={cn(
@@ -538,6 +545,13 @@ function SimMetricCard({
           </span>
         )}
       </div>
+      <span className="text-2xl font-bold mt-1 block">{value}</span>
+      {subtitle && (
+        <div className="mt-2 text-xs text-muted">
+          <span>{subtitle}</span>
+          {subtitleValue && <span className="block font-medium text-foreground/70">{subtitleValue}</span>}
+        </div>
+      )}
     </Card>
   );
 }
@@ -567,10 +581,9 @@ function FearGreedMini({ value }: { value: number }) {
             : 'Extreme Greed';
 
   return (
-    <Card className="p-3">
-      <span className="text-xs text-muted">Fear & Greed Index</span>
-      <div className="flex items-center justify-between mt-1">
-        <span className="text-lg font-semibold">{value}</span>
+    <Card className="p-4">
+      <div className="flex items-start justify-between">
+        <span className="text-xs text-muted">Fear and Greed Index</span>
         <span
           className="text-xs font-medium px-2 py-0.5 rounded-full"
           style={{ backgroundColor: `${color}20`, color }}
@@ -578,11 +591,18 @@ function FearGreedMini({ value }: { value: number }) {
           {label}
         </span>
       </div>
-      <div className="mt-2 h-1.5 bg-background rounded-full overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${value}%`, backgroundColor: color }}
-        />
+      <span className="text-2xl font-bold mt-1 block">{value}</span>
+      <div className="mt-3 h-2 rounded-full overflow-hidden" style={{ background: 'linear-gradient(90deg, #ef4444 0%, #f97316 25%, #eab308 50%, #84cc16 75%, #22c55e 100%)' }}>
+        <div className="relative h-full">
+          <div
+            className="absolute top-0 w-3 h-3 bg-white rounded-full border-2 border-gray-800 -translate-y-0.5"
+            style={{ left: `${value}%`, transform: 'translateX(-50%) translateY(-1px)' }}
+          />
+        </div>
+      </div>
+      <div className="flex justify-between mt-1">
+        <span className="text-[10px] text-muted">Extreme Fear</span>
+        <span className="text-[10px] text-muted">Extreme Greed</span>
       </div>
     </Card>
   );
@@ -595,10 +615,9 @@ function AltcoinMini({ value }: { value: number }) {
   const color = isBtc ? '#f7931a' : '#627eea';
 
   return (
-    <Card className="p-3">
-      <span className="text-xs text-muted">Altcoin Season Index</span>
-      <div className="flex items-center justify-between mt-1">
-        <span className="text-lg font-semibold">{value}</span>
+    <Card className="p-4">
+      <div className="flex items-start justify-between">
+        <span className="text-xs text-muted">Altcoin Season Index</span>
         <span
           className="text-xs font-medium px-2 py-0.5 rounded-full"
           style={{ backgroundColor: `${color}20`, color }}
@@ -606,14 +625,18 @@ function AltcoinMini({ value }: { value: number }) {
           {label}
         </span>
       </div>
-      <div className="mt-2 h-1.5 bg-background rounded-full overflow-hidden">
-        <div
-          className="h-full transition-all duration-500"
-          style={{
-            width: `${value}%`,
-            background: 'linear-gradient(90deg, #f7931a 0%, #627eea 100%)',
-          }}
-        />
+      <span className="text-2xl font-bold mt-1 block">{value}</span>
+      <div className="mt-3 h-2 rounded-full overflow-hidden" style={{ background: 'linear-gradient(90deg, #f7931a 0%, #627eea 100%)' }}>
+        <div className="relative h-full">
+          <div
+            className="absolute top-0 w-3 h-3 bg-white rounded-full border-2 border-gray-800"
+            style={{ left: `${value}%`, transform: 'translateX(-50%) translateY(-1px)' }}
+          />
+        </div>
+      </div>
+      <div className="flex justify-between mt-1">
+        <span className="text-[10px] text-muted">Bitcoin Season</span>
+        <span className="text-[10px] text-muted">Altcoin Season</span>
       </div>
     </Card>
   );
