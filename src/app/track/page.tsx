@@ -145,6 +145,7 @@ export default function TrackPage() {
     let oldestPositionTimestamp = Date.now();
     let totalPositionAgeDays = 0;
     let totalHodlValue = 0; // Deposits valued at current prices (for HODL/IL calc)
+    let totalDailyEarnings = 0; // Sum of per-position daily earnings for accurate portfolio APR
 
     walletPositions.forEach(pos => {
       const token0Symbol = pos.token0Symbol || 'ETH';
@@ -222,6 +223,11 @@ export default function TrackPage() {
           : 30; // Default to 30 days if no valid timestamp
         const positionAgeDays = Math.max(1, rawAgeDays); // Minimum 1 day per position
         totalPositionAgeDays += positionAgeDays;
+
+        // Per-position daily earnings for accurate portfolio APR
+        const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
+        const posClaimedUSD = (v4History.claimedToken0 * token0Price) + (v4History.claimedToken1 * token1Price);
+        totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
       } else if (!isV4 && v3History) {
         // V3 position with history from The Graph
         // HODL value = deposits at current prices
@@ -261,10 +267,20 @@ export default function TrackPage() {
           : 30; // Default to 30 days if no valid timestamp
         const positionAgeDays = Math.max(1, rawAgeDays); // Minimum 1 day per position
         totalPositionAgeDays += positionAgeDays;
+
+        // Per-position daily earnings for accurate portfolio APR
+        const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
+        const posClaimedUSD = (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
+        totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
       } else {
         // No history available - estimate deposits as current value
         totalOriginalInvestment += positionValue;
         totalHodlValue += positionValue;
+
+        // Per-position daily earnings (unclaimed only, no history for claimed)
+        const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
+        const defaultAgeDays = 30; // Default to 30 days if no history
+        totalDailyEarnings += posUnclaimedUSD / defaultAgeDays;
       }
     });
 
@@ -282,6 +298,7 @@ export default function TrackPage() {
       v4Count,
       oldestPositionTimestamp,
       avgPositionAgeDays,
+      totalDailyEarnings,
     };
   }, [walletPositions, prices, positionHistories, v4PositionHistories]);
 
@@ -302,12 +319,15 @@ export default function TrackPage() {
   );
 
   // Earnings breakdown with real claimed fees from The Graph
-  const unclaimedFees = walletPositionsTotals.totalUnclaimedFees + manualTotalFees;
+  // Manual fees are total fees (no unclaimed/claimed split), kept separate for correct retention
+  const unclaimedFees = walletPositionsTotals.totalUnclaimedFees;
   const claimedFees = walletPositionsTotals.totalClaimedFees;
-  const totalEarnings = unclaimedFees + claimedFees;
+  const totalEarnings = unclaimedFees + claimedFees + manualTotalFees;
 
-  // Retention rate: percentage of earnings that are still unclaimed
-  const retentionRate = totalEarnings > 0 ? ((unclaimedFees / totalEarnings) * 100) : 0;
+  // Retention rate: percentage of wallet earnings that are still unclaimed
+  // Only wallet positions have unclaimed/claimed distinction, manual fees excluded
+  const walletEarnings = unclaimedFees + claimedFees;
+  const retentionRate = walletEarnings > 0 ? ((unclaimedFees / walletEarnings) * 100) : 0;
 
   // Profit/Loss = Total Current Value (position + all fees) - Original Investment
   // This is the actual capital gain/loss
@@ -330,14 +350,11 @@ export default function TrackPage() {
   // ROI: Total profit relative to initial investment
   const roi = safeOriginalInvestment > 0 ? (profitLoss / safeOriginalInvestment) * 100 : 0;
 
-  // APR calculation: (earnings / days) * 365 / investment * 100
-  // Use current liquidity as the base for yield rate APR (how much you're earning on what you have)
-  // This gives a clearer picture of current yield rate
-  const avgPositionAgeDays = Math.max(1, walletPositionsTotals.avgPositionAgeDays || 30);
-
-  // Use current liquidity value for APR denominator (yield rate on current capital)
+  // APR calculation: uses sum of per-position daily earnings for accurate portfolio yield
+  // Each position's daily earnings = (unclaimed + claimed) / positionAgeDays
+  // This avoids distortion from simple average of position ages
   const aprBase = Math.max(totalValue, 1);
-  const rawApr = ((totalEarnings / avgPositionAgeDays) * 365 / aprBase) * 100;
+  const rawApr = (walletPositionsTotals.totalDailyEarnings * 365 / aprBase) * 100;
   // Cap APR at reasonable maximum (10,000%) to prevent display of absurd values from edge cases
   const apr = Math.min(rawApr, 10000);
 
@@ -347,7 +364,7 @@ export default function TrackPage() {
     totalOriginalInvestment,
     aprBase,
     totalEarnings,
-    avgPositionAgeDays,
+    totalDailyEarnings: walletPositionsTotals.totalDailyEarnings,
     rawApr,
     cappedApr: apr,
     positionCount: walletPositions.length,

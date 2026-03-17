@@ -1,6 +1,6 @@
 'use client';
 
-import { Pool } from '@/types';
+import { Pool, TickData, PoolDayData } from '@/types';
 import { EXCLUDED_POOL_IDENTIFIERS } from '@/lib/constants';
 
 // The Graph Gateway API Key (free tier available at https://thegraph.com/studio/)
@@ -896,4 +896,195 @@ export async function fetchProtocolStats(network: string = 'ethereum'): Promise<
 
   // All URLs failed - return mock data silently
   return mockStats;
+}
+
+// ============================================================
+// Pool Tick Data (for Liquidity Distribution chart)
+// ============================================================
+
+const POOL_TICKS_QUERY = `
+  query GetPoolTicks($poolId: String!, $first: Int!, $skip: Int!) {
+    ticks(
+      where: { pool: $poolId, liquidityNet_not: "0" }
+      first: $first
+      skip: $skip
+      orderBy: tickIdx
+      orderDirection: asc
+    ) {
+      tickIdx
+      liquidityGross
+      liquidityNet
+    }
+  }
+`;
+
+export async function fetchPoolTicks(
+  poolId: string,
+  network: string = 'ethereum'
+): Promise<TickData[]> {
+  const subgraphUrls = getSubgraphUrls(network);
+  if (subgraphUrls.length === 0) return generateMockTicks();
+
+  const allTicks: TickData[] = [];
+  let skip = 0;
+  const pageSize = 1000;
+
+  for (const url of subgraphUrls) {
+    try {
+      let hasMore = true;
+      while (hasMore) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: POOL_TICKS_QUERY,
+            variables: { poolId: poolId.toLowerCase(), first: pageSize, skip },
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) break;
+        const data = await response.json();
+        if (data.errors || !data.data?.ticks) break;
+
+        const ticks = data.data.ticks.map((t: { tickIdx: string; liquidityGross: string; liquidityNet: string }) => ({
+          tickIdx: parseInt(t.tickIdx),
+          liquidityGross: t.liquidityGross,
+          liquidityNet: t.liquidityNet,
+        }));
+
+        allTicks.push(...ticks);
+        hasMore = ticks.length === pageSize;
+        skip += pageSize;
+      }
+
+      if (allTicks.length > 0) return allTicks;
+    } catch {
+      continue;
+    }
+  }
+
+  return allTicks.length > 0 ? allTicks : generateMockTicks();
+}
+
+function generateMockTicks(): TickData[] {
+  const ticks: TickData[] = [];
+  const centerTick = 202000; // Approximate WETH/USDC tick
+  for (let i = -100; i <= 100; i++) {
+    const tickIdx = centerTick + i * 60;
+    const distance = Math.abs(i);
+    const liquidity = Math.max(1e15, 5e18 * Math.exp(-distance * 0.03));
+    ticks.push({
+      tickIdx,
+      liquidityGross: liquidity.toFixed(0),
+      liquidityNet: (i < 0 ? liquidity : -liquidity).toFixed(0),
+    });
+  }
+  return ticks;
+}
+
+// ============================================================
+// Pool Day Data (for Price/Volume History charts)
+// ============================================================
+
+const POOL_DAY_DATA_QUERY = `
+  query GetPoolDayData($poolId: String!, $first: Int!) {
+    poolDayDatas(
+      where: { pool: $poolId }
+      first: $first
+      orderBy: date
+      orderDirection: desc
+    ) {
+      date
+      open
+      high
+      low
+      close
+      volumeUSD
+      feesUSD
+      tvlUSD
+      liquidity
+    }
+  }
+`;
+
+export async function fetchPoolDayData(
+  poolId: string,
+  network: string = 'ethereum',
+  days: number = 30
+): Promise<PoolDayData[]> {
+  const subgraphUrls = getSubgraphUrls(network);
+  if (subgraphUrls.length === 0) return generateMockDayData(days);
+
+  for (const url of subgraphUrls) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: POOL_DAY_DATA_QUERY,
+          variables: { poolId: poolId.toLowerCase(), first: days },
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (data.errors || !data.data?.poolDayDatas) continue;
+
+      const dayDatas: PoolDayData[] = data.data.poolDayDatas
+        .map((d: { date: string; open: string; high: string; low: string; close: string; volumeUSD: string; feesUSD: string; tvlUSD: string }) => ({
+          date: parseInt(d.date) * 1000,
+          open: parseFloat(d.open) || 0,
+          high: parseFloat(d.high) || 0,
+          low: parseFloat(d.low) || 0,
+          close: parseFloat(d.close) || 0,
+          volumeUSD: parseFloat(d.volumeUSD) || 0,
+          feesUSD: parseFloat(d.feesUSD) || 0,
+          tvlUSD: parseFloat(d.tvlUSD) || 0,
+        }))
+        .reverse(); // Chronological order
+
+      if (dayDatas.length > 0) return dayDatas;
+    } catch {
+      continue;
+    }
+  }
+
+  return generateMockDayData(days);
+}
+
+function generateMockDayData(days: number): PoolDayData[] {
+  const data: PoolDayData[] = [];
+  let price = 2300;
+  const now = Date.now();
+
+  for (let i = days; i >= 0; i--) {
+    const change = (Math.random() - 0.48) * 80;
+    const open = price;
+    price = Math.max(1800, Math.min(2800, price + change));
+    const high = Math.max(open, price) + Math.random() * 30;
+    const low = Math.min(open, price) - Math.random() * 30;
+    const volume = 5000000 + Math.random() * 10000000;
+
+    data.push({
+      date: now - i * 86400000,
+      open,
+      high,
+      low,
+      close: price,
+      volumeUSD: volume,
+      feesUSD: volume * 0.0005,
+      tvlUSD: 17000000 + Math.random() * 2000000,
+    });
+  }
+  return data;
 }

@@ -96,5 +96,44 @@ export interface Network {
 export type SortDirection = 'asc' | 'desc';
 export type PoolSortField = 'tvl' | 'volume24h' | 'fees24h' | 'apr';
 
+// Pool tick data for liquidity distribution charts
+export interface TickData {
+  tickIdx: number;
+  liquidityGross: string;
+  liquidityNet: string;
+}
+
+// Pool historical day data for price/volume charts
+export interface PoolDayData {
+  date: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volumeUSD: number;
+  feesUSD: number;
+  tvlUSD: number;
+}
+
+// Computed pool statistics for simulation
+export interface SimulationPoolStats {
+  priceVolatility: number;
+  avgDailyFees: number;
+  dailyFeesToTvl: number;
+  avgDailyVolume: number;
+  dailyVolumeToTvl: number;
+  correlation: number;
+  geometricMean: number;
+}
+
+// Liquidity distribution bin for charts
+export interface LiquidityBin {
+  price0: number;
+  price1: number;
+  liquidity: number;
+  isCurrent: boolean;
+  isInRange: boolean;
+}
+
 // Language
 export type Language = 'en' | 'es' | 'pt' | 'fr' | 'de';

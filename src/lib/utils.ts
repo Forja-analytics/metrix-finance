@@ -363,3 +363,151 @@ export function debounce<T extends (...args: unknown[]) => unknown>(
     timeout = setTimeout(() => func(...args), wait);
   };
 }
+
+// ============================================================
+// Liquidity Distribution Calculation
+// ============================================================
+
+import type { TickData, PoolDayData, LiquidityBin, SimulationPoolStats } from '@/types';
+
+export function calculateLiquidityDistribution(
+  ticks: TickData[],
+  currentTick: number,
+  tickSpacing: number,
+  token0Decimals: number,
+  token1Decimals: number,
+  lowerTick?: number,
+  upperTick?: number,
+  numBins: number = 100
+): LiquidityBin[] {
+  if (ticks.length === 0) return [];
+
+  // Sort ticks and accumulate active liquidity
+  const sortedTicks = [...ticks].sort((a, b) => a.tickIdx - b.tickIdx);
+
+  // Find the range to display (centered around current tick)
+  const tickRange = Math.max(
+    Math.abs(sortedTicks[sortedTicks.length - 1].tickIdx - sortedTicks[0].tickIdx),
+    tickSpacing * 200
+  );
+  const displayMin = currentTick - tickRange / 2;
+  const displayMax = currentTick + tickRange / 2;
+  const binWidth = (displayMax - displayMin) / numBins;
+
+  // Build cumulative liquidity by walking through ticks
+  let cumulativeLiquidity = BigInt(0);
+  const tickLiquidityMap = new Map<number, bigint>();
+
+  for (const tick of sortedTicks) {
+    cumulativeLiquidity += BigInt(tick.liquidityNet);
+    tickLiquidityMap.set(tick.tickIdx, cumulativeLiquidity);
+  }
+
+  // Create bins
+  const bins: LiquidityBin[] = [];
+  for (let i = 0; i < numBins; i++) {
+    const binTickLow = displayMin + i * binWidth;
+    const binTickHigh = binTickLow + binWidth;
+    const binTickMid = (binTickLow + binTickHigh) / 2;
+
+    // Find liquidity at this tick (closest tick below)
+    let liquidity = BigInt(0);
+    for (const tick of sortedTicks) {
+      if (tick.tickIdx <= binTickMid) {
+        liquidity = tickLiquidityMap.get(tick.tickIdx) || BigInt(0);
+      } else break;
+    }
+
+    const price0 = tickToPrice(Math.round(binTickLow), token0Decimals, token1Decimals);
+    const price1 = tickToPrice(Math.round(binTickHigh), token0Decimals, token1Decimals);
+    const isCurrent = currentTick >= binTickLow && currentTick < binTickHigh;
+    const isInRange = lowerTick !== undefined && upperTick !== undefined
+      ? binTickMid >= lowerTick && binTickMid <= upperTick
+      : false;
+
+    bins.push({
+      price0,
+      price1,
+      liquidity: Number(liquidity < 0 ? -liquidity : liquidity),
+      isCurrent,
+      isInRange,
+    });
+  }
+
+  return bins;
+}
+
+// ============================================================
+// Pool Statistics Calculation
+// ============================================================
+
+export function calculatePoolStats(dayData: PoolDayData[], tvl: number): SimulationPoolStats {
+  if (dayData.length < 2) {
+    return {
+      priceVolatility: 0,
+      avgDailyFees: 0,
+      dailyFeesToTvl: 0,
+      avgDailyVolume: 0,
+      dailyVolumeToTvl: 0,
+      correlation: 0,
+      geometricMean: 0,
+    };
+  }
+
+  // Daily returns for volatility
+  const returns: number[] = [];
+  const prices: number[] = [];
+  const volumes: number[] = [];
+  const fees: number[] = [];
+
+  for (let i = 0; i < dayData.length; i++) {
+    prices.push(dayData[i].close);
+    volumes.push(dayData[i].volumeUSD);
+    fees.push(dayData[i].feesUSD);
+    if (i > 0 && dayData[i - 1].close > 0) {
+      returns.push(Math.log(dayData[i].close / dayData[i - 1].close));
+    }
+  }
+
+  // Price volatility (annualized std dev of daily log returns)
+  const meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance = returns.reduce((sum, r) => sum + (r - meanReturn) ** 2, 0) / returns.length;
+  const dailyVol = Math.sqrt(variance);
+  const priceVolatility = dailyVol * Math.sqrt(365) * 100;
+
+  // Averages
+  const avgDailyFees = fees.reduce((a, b) => a + b, 0) / fees.length;
+  const avgDailyVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+  const safeTvl = Math.max(tvl, 1);
+
+  // Correlation between price and volume
+  const meanPrice = prices.reduce((a, b) => a + b, 0) / prices.length;
+  const meanVolume = avgDailyVolume;
+  let covPV = 0, varP = 0, varV = 0;
+  for (let i = 0; i < prices.length; i++) {
+    const dp = prices[i] - meanPrice;
+    const dv = volumes[i] - meanVolume;
+    covPV += dp * dv;
+    varP += dp * dp;
+    varV += dv * dv;
+  }
+  const correlation = (varP > 0 && varV > 0) ? covPV / Math.sqrt(varP * varV) : 0;
+
+  // Geometric mean of prices
+  const logSum = prices.filter(p => p > 0).reduce((sum, p) => sum + Math.log(p), 0);
+  const geometricMean = Math.exp(logSum / prices.length);
+
+  return {
+    priceVolatility,
+    avgDailyFees,
+    dailyFeesToTvl: (avgDailyFees / safeTvl) * 100,
+    avgDailyVolume,
+    dailyVolumeToTvl: (avgDailyVolume / safeTvl) * 100,
+    correlation,
+    geometricMean,
+  };
+}
+
+export function nearestUsableTick(tick: number, tickSpacing: number): number {
+  return Math.round(tick / tickSpacing) * tickSpacing;
+}
