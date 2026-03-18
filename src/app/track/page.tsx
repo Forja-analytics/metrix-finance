@@ -15,7 +15,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { Position } from '@/types';
 import { Plus, Wallet, TrendingUp, DollarSign, PieChart, RefreshCw, Link2, Search, ChevronDown, Calendar, Bell, X, AlertTriangle } from 'lucide-react';
 import { formatCurrency, formatPercent } from '@/lib/utils';
-import { fetchTokenPrices } from '@/lib/api';
+import { fetchTokenPrices, fetchTokenPricesByContract } from '@/lib/api';
 import { fetchPositionsHistory, PositionHistory } from '@/lib/uniswap-subgraph';
 import { fetchV4PositionsHistory, V4PositionHistory } from '@/lib/v4-subgraph';
 
@@ -44,6 +44,35 @@ export default function TrackPage() {
     }, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  // Fetch prices for tokens not in the hardcoded list (via contract address lookup)
+  useEffect(() => {
+    if (walletPositions.length === 0 || Object.keys(prices).length === 0) return;
+
+    const missingTokens: Array<{ address: string; chainId: number; symbol: string }> = [];
+    const seen = new Set<string>();
+
+    walletPositions.forEach(pos => {
+      const s0 = pos.token0Symbol || '';
+      const s1 = pos.token1Symbol || '';
+
+      if (s0 && s0 !== 'Unknown' && pos.token0 && !(s0 in prices) && !seen.has(s0)) {
+        seen.add(s0);
+        missingTokens.push({ address: pos.token0, chainId: pos.chainId || 1, symbol: s0 });
+      }
+      if (s1 && s1 !== 'Unknown' && pos.token1 && !(s1 in prices) && !seen.has(s1)) {
+        seen.add(s1);
+        missingTokens.push({ address: pos.token1, chainId: pos.chainId || 1, symbol: s1 });
+      }
+    });
+
+    if (missingTokens.length > 0) {
+      console.log(`[AUDIT] Fetching contract prices for ${missingTokens.length} unmapped tokens:`, missingTokens.map(t => t.symbol));
+      fetchTokenPricesByContract(missingTokens).then(contractPrices => {
+        setPrices(prev => ({ ...prev, ...contractPrices }));
+      });
+    }
+  }, [walletPositions, prices]);
 
   // Fetch position histories when wallet positions change
   // V3 positions use The Graph subgraph, V4 positions use Etherscan
@@ -119,6 +148,7 @@ export default function TrackPage() {
         tokenId: pos.tokenId.toString(),
         tickLower: pos.tickLower,
         tickUpper: pos.tickUpper,
+        poolId: pos.poolId,
       }));
       const result = await fetchV4PositionsHistory(tokenIds, address, positionsWithTicks);
       setV4PositionHistories(result.data);
@@ -188,11 +218,10 @@ export default function TrackPage() {
             ? v4History.depositedUSD
             : depositsAtCurrentPrices;
 
-          // Safety: if calculated value is unreasonably small, use current position value
-          // Original investment shouldn't be less than 10% of current value in most cases
-          const minReasonable = Math.max(1, positionValue * 0.1);
-          if (originalInvestment < minReasonable) {
-            originalInvestment = positionValue > 0 ? positionValue : 1;
+          // Guard only against clearly invalid data (NaN or negative)
+          if (isNaN(originalInvestment) || originalInvestment < 0) {
+            originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+            console.warn(`[AUDIT] V4 position ${pos.tokenId}: invalid originalInvestment, using fallback`);
           }
 
           totalOriginalInvestment += originalInvestment;
@@ -238,11 +267,10 @@ export default function TrackPage() {
           ? v3History.depositedUSD
           : depositsAtCurrentPrices;
 
-        // Safety: if calculated value is unreasonably small, use current position value
-        // Original investment shouldn't be less than 10% of current value in most cases
-        const minReasonable = Math.max(1, positionValue * 0.1);
-        if (originalInvestment < minReasonable) {
-          originalInvestment = positionValue > 0 ? positionValue : 1;
+        // Guard only against clearly invalid data (NaN or negative)
+        if (isNaN(originalInvestment) || originalInvestment < 0) {
+          originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+          console.warn(`[AUDIT] V3 position ${pos.tokenId}: invalid originalInvestment, using fallback`);
         }
 
         totalOriginalInvestment += originalInvestment;
@@ -344,11 +372,8 @@ export default function TrackPage() {
   // VS HODL = Earnings - Impermanent Loss
   const vsHodl = totalEarnings - Math.max(0, impermanentLoss);
 
-  // Use the HIGHER of calculated investment OR current value for safe APR calculation
-  const safeOriginalInvestment = Math.max(totalOriginalInvestment, totalValue, 1);
-
   // ROI: Total profit relative to initial investment
-  const roi = safeOriginalInvestment > 0 ? (profitLoss / safeOriginalInvestment) * 100 : 0;
+  const roi = totalOriginalInvestment > 0 ? (profitLoss / totalOriginalInvestment) * 100 : 0;
 
   // APR calculation: uses sum of per-position daily earnings for accurate portfolio yield
   // Each position's daily earnings = (unclaimed + claimed) / positionAgeDays

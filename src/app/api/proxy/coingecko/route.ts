@@ -6,12 +6,22 @@ export async function GET(request: NextRequest) {
   const vsCurrencies = searchParams.get('vs_currencies') || 'usd';
   const include24hrChange = searchParams.get('include_24hr_change') || 'true';
 
-  if (!ids) {
-    return NextResponse.json({ error: 'Missing ids parameter' }, { status: 400 });
-  }
+  // Contract-based price lookup (for tokens not in hardcoded list)
+  const platform = searchParams.get('platform');
+  const contractAddresses = searchParams.get('contract_addresses');
 
   try {
-    const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=${vsCurrencies}&include_24hr_change=${include24hrChange}`;
+    let url: string;
+
+    if (platform && contractAddresses) {
+      // Use token_price endpoint for contract-address-based lookups
+      url = `https://api.coingecko.com/api/v3/simple/token_price/${platform}?contract_addresses=${contractAddresses}&vs_currencies=${vsCurrencies}`;
+    } else if (ids) {
+      // Use standard price endpoint for CoinGecko ID-based lookups
+      url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=${vsCurrencies}&include_24hr_change=${include24hrChange}`;
+    } else {
+      return NextResponse.json({ error: 'Missing ids or platform+contract_addresses parameters' }, { status: 400 });
+    }
 
     const response = await fetch(url, {
       headers: {

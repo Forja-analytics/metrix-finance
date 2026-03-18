@@ -12,6 +12,31 @@ import { mainnet, arbitrum, polygon, optimism, base, bsc } from 'wagmi/chains';
 // All supported chains for multi-chain fetching
 const SUPPORTED_CHAINS = [mainnet, arbitrum, polygon, optimism, base, bsc];
 
+// Well-known token decimals as fallback when RPC fails
+// Prevents catastrophic miscalculation (e.g., treating USDC 6-decimal as 18-decimal)
+const WELL_KNOWN_DECIMALS: Record<string, number> = {
+  // USDC (6 decimals)
+  '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 6, // Ethereum
+  '0xaf88d065e77c8cc2239327c5edb3a432268e5831': 6, // Arbitrum
+  '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359': 6, // Polygon
+  '0x0b2c639c533813f4aa9d7837caf62653d097ff85': 6, // Optimism
+  '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 6, // Base
+  '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d': 18, // BSC (BSC USDC is 18)
+  // USDT (6 decimals)
+  '0xdac17f958d2ee523a2206206994597c13d831ec7': 6, // Ethereum
+  '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': 6, // Arbitrum
+  '0xc2132d05d31c914a87c6611c10748aeb04b58e8f': 6, // Polygon
+  '0x94b008aa00579c1307b0ef2c499ad98a8ce58e58': 6, // Optimism
+  // WBTC (8 decimals)
+  '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': 8, // Ethereum
+  '0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f': 8, // Arbitrum
+  '0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6': 8, // Polygon
+};
+
+function getWellKnownDecimals(address: string): number | undefined {
+  return WELL_KNOWN_DECIMALS[address.toLowerCase()];
+}
+
 // V3 Pool init code hash (used to compute pool address)
 const POOL_INIT_CODE_HASH = '0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54' as const;
 
@@ -120,6 +145,39 @@ function tickToSqrtRatioX96(tick: number): bigint {
   return ratio >> 32n;
 }
 
+// Convert a bigint token amount to a decimal number, avoiding Number() precision loss.
+// For values that fit in 53 bits, uses direct conversion. For larger values, uses
+// string-based splitting to preserve the most significant digits.
+function bigintToDecimal(value: bigint, decimals: number): number {
+  if (value === 0n) return 0;
+
+  const isNegative = value < 0n;
+  const absValue = isNegative ? -value : value;
+
+  // If value fits safely in Number (< 2^53), use direct conversion
+  if (absValue < 9007199254740992n) {
+    const result = Number(absValue) / Math.pow(10, decimals);
+    return isNegative ? -result : result;
+  }
+
+  // String-based conversion for large values
+  const str = absValue.toString();
+  let intPart: string;
+  let fracPart: string;
+
+  if (str.length <= decimals) {
+    intPart = '0';
+    fracPart = str.padStart(decimals, '0');
+  } else {
+    intPart = str.slice(0, str.length - decimals);
+    fracPart = str.slice(str.length - decimals);
+  }
+
+  // Keep up to 18 fractional digits for precision
+  const result = parseFloat(`${intPart}.${fracPart.slice(0, 18)}`);
+  return isNegative ? -result : result;
+}
+
 // Calculate token amounts from liquidity and price range
 // Uses Uniswap V3 math: https://docs.uniswap.org/contracts/v3/reference/core/libraries/LiquidityAmounts
 function getAmountsFromLiquidity(
@@ -177,8 +235,8 @@ function getAmountsFromLiquidity(
   }
 
   return {
-    amount0: Number(amount0) / Math.pow(10, token0Decimals),
-    amount1: Number(amount1) / Math.pow(10, token1Decimals),
+    amount0: bigintToDecimal(amount0, token0Decimals),
+    amount1: bigintToDecimal(amount1, token1Decimals),
   };
 }
 
@@ -209,6 +267,10 @@ export interface OnChainPosition {
   // Calculated uncollected fees
   uncollectedFees0?: number;
   uncollectedFees1?: number;
+  // Position status
+  isClosed?: boolean;
+  // V4 pool identifier (for matching ModifyLiquidity events)
+  poolId?: string;
   // Chain info for multi-chain support
   chainId?: number;
   chainName?: string;
@@ -216,6 +278,7 @@ export interface OnChainPosition {
 
 // Constants for fee calculation
 const Q128 = 2n ** 128n;
+const MAX_UINT256 = 2n ** 256n;
 
 // Calculate uncollected fees for a position
 // Based on Uniswap V3 fee calculation logic
@@ -231,16 +294,16 @@ function calculateUncollectedFees(
   token1Decimals: number
 ): { fees0: number; fees1: number } {
   // Calculate the fee growth delta (handle underflow with modular arithmetic)
-  const feeGrowthDelta0 = (feeGrowthInside0X128 - feeGrowthInside0LastX128 + (2n ** 256n)) % (2n ** 256n);
-  const feeGrowthDelta1 = (feeGrowthInside1X128 - feeGrowthInside1LastX128 + (2n ** 256n)) % (2n ** 256n);
+  const feeGrowthDelta0 = (feeGrowthInside0X128 - feeGrowthInside0LastX128 + MAX_UINT256) % MAX_UINT256;
+  const feeGrowthDelta1 = (feeGrowthInside1X128 - feeGrowthInside1LastX128 + MAX_UINT256) % MAX_UINT256;
 
   // Calculate uncollected fees: fees = (liquidity * feeGrowthDelta) / Q128 + tokensOwed
   const uncollectedFees0 = (liquidity * feeGrowthDelta0) / Q128 + tokensOwed0;
   const uncollectedFees1 = (liquidity * feeGrowthDelta1) / Q128 + tokensOwed1;
 
   return {
-    fees0: Number(uncollectedFees0) / Math.pow(10, token0Decimals),
-    fees1: Number(uncollectedFees1) / Math.pow(10, token1Decimals),
+    fees0: bigintToDecimal(uncollectedFees0, token0Decimals),
+    fees1: bigintToDecimal(uncollectedFees1, token1Decimals),
   };
 }
 
@@ -266,8 +329,8 @@ function calculateFeeGrowthInside(
     feeGrowthBelow0X128 = tickLowerFeeGrowthOutside0X128;
     feeGrowthBelow1X128 = tickLowerFeeGrowthOutside1X128;
   } else {
-    feeGrowthBelow0X128 = feeGrowthGlobal0X128 - tickLowerFeeGrowthOutside0X128;
-    feeGrowthBelow1X128 = feeGrowthGlobal1X128 - tickLowerFeeGrowthOutside1X128;
+    feeGrowthBelow0X128 = (feeGrowthGlobal0X128 - tickLowerFeeGrowthOutside0X128 + MAX_UINT256) % MAX_UINT256;
+    feeGrowthBelow1X128 = (feeGrowthGlobal1X128 - tickLowerFeeGrowthOutside1X128 + MAX_UINT256) % MAX_UINT256;
   }
 
   // Calculate fee growth above
@@ -275,13 +338,13 @@ function calculateFeeGrowthInside(
     feeGrowthAbove0X128 = tickUpperFeeGrowthOutside0X128;
     feeGrowthAbove1X128 = tickUpperFeeGrowthOutside1X128;
   } else {
-    feeGrowthAbove0X128 = feeGrowthGlobal0X128 - tickUpperFeeGrowthOutside0X128;
-    feeGrowthAbove1X128 = feeGrowthGlobal1X128 - tickUpperFeeGrowthOutside1X128;
+    feeGrowthAbove0X128 = (feeGrowthGlobal0X128 - tickUpperFeeGrowthOutside0X128 + MAX_UINT256) % MAX_UINT256;
+    feeGrowthAbove1X128 = (feeGrowthGlobal1X128 - tickUpperFeeGrowthOutside1X128 + MAX_UINT256) % MAX_UINT256;
   }
 
   // Fee growth inside = global - below - above (with overflow handling)
-  const feeGrowthInside0X128 = (feeGrowthGlobal0X128 - feeGrowthBelow0X128 - feeGrowthAbove0X128 + (2n ** 256n)) % (2n ** 256n);
-  const feeGrowthInside1X128 = (feeGrowthGlobal1X128 - feeGrowthBelow1X128 - feeGrowthAbove1X128 + (2n ** 256n)) % (2n ** 256n);
+  const feeGrowthInside0X128 = (feeGrowthGlobal0X128 - feeGrowthBelow0X128 - feeGrowthAbove0X128 + MAX_UINT256) % MAX_UINT256;
+  const feeGrowthInside1X128 = (feeGrowthGlobal1X128 - feeGrowthBelow1X128 - feeGrowthAbove1X128 + MAX_UINT256) % MAX_UINT256;
 
   return { feeGrowthInside0X128, feeGrowthInside1X128 };
 }
@@ -364,8 +427,8 @@ async function fetchV3PositionsForChain(
       const [nonce, operator, token0, token1, fee, tickLower, tickUpper, liquidity,
              feeGrowthInside0LastX128, feeGrowthInside1LastX128, tokensOwed0, tokensOwed1] = result;
 
-      // Skip positions with no liquidity
-      if (liquidity === BigInt(0)) continue;
+      // Track closed positions (liquidity removed) — still include for historical data
+      const isClosed = liquidity === 0n;
 
       // Fetch token info
       const tokenInfoContracts = [
@@ -378,9 +441,15 @@ async function fetchV3PositionsForChain(
       const tokenInfoResults = await readContracts(config, { contracts: tokenInfoContracts as any });
 
       const token0Symbol = (tokenInfoResults[0]?.result as string) || 'UNKNOWN';
-      const token0Decimals = Number(tokenInfoResults[1]?.result) || 18;
+      const token0DecimalsRaw = tokenInfoResults[1]?.result;
+      const token0Decimals = token0DecimalsRaw != null ? Number(token0DecimalsRaw) : (getWellKnownDecimals(token0 as string) ?? 18);
       const token1Symbol = (tokenInfoResults[2]?.result as string) || 'UNKNOWN';
-      const token1Decimals = Number(tokenInfoResults[3]?.result) || 18;
+      const token1DecimalsRaw = tokenInfoResults[3]?.result;
+      const token1Decimals = token1DecimalsRaw != null ? Number(token1DecimalsRaw) : (getWellKnownDecimals(token1 as string) ?? 18);
+
+      if (token0DecimalsRaw == null || token1DecimalsRaw == null) {
+        console.warn(`[AUDIT] Decimals fallback used: ${token0Symbol}=${token0Decimals} (RPC: ${token0DecimalsRaw}), ${token1Symbol}=${token1Decimals} (RPC: ${token1DecimalsRaw})`);
+      }
 
       // Compute pool address and fetch slot0 for token amounts
       let token0Amount = 0;
@@ -390,98 +459,103 @@ async function fetchV3PositionsForChain(
       let uncollectedFees0 = 0;
       let uncollectedFees1 = 0;
 
-      try {
-        const poolAddress = computeV3PoolAddress(
-          factoryAddress,
-          token0 as `0x${string}`,
-          token1 as `0x${string}`,
-          Number(fee)
-        );
-
-        console.log(`${chainName}: Pool address for ${token0Symbol}/${token1Symbol}: ${poolAddress}`);
-
-        // Fetch pool slot0, feeGrowthGlobal, and tick data for fee calculation
-        const poolDataContracts = [
-          { address: poolAddress, abi: POOL_ABI, functionName: 'slot0', chainId },
-          { address: poolAddress, abi: POOL_ABI, functionName: 'feeGrowthGlobal0X128', chainId },
-          { address: poolAddress, abi: POOL_ABI, functionName: 'feeGrowthGlobal1X128', chainId },
-          { address: poolAddress, abi: POOL_ABI, functionName: 'ticks', args: [Number(tickLower)], chainId },
-          { address: poolAddress, abi: POOL_ABI, functionName: 'ticks', args: [Number(tickUpper)], chainId },
-        ];
-
-        const poolDataResults = await readContracts(config, {
-          contracts: poolDataContracts as any,
-        });
-
-        const slot0 = poolDataResults[0]?.result as any;
-        const feeGrowthGlobal0X128 = poolDataResults[1]?.result as bigint || 0n;
-        const feeGrowthGlobal1X128 = poolDataResults[2]?.result as bigint || 0n;
-        const tickLowerData = poolDataResults[3]?.result as any;
-        const tickUpperData = poolDataResults[4]?.result as any;
-
-        if (slot0) {
-          const sqrtPriceX96 = slot0[0] as bigint;
-          currentTick = Number(slot0[1]);
-          inRange = currentTick >= Number(tickLower) && currentTick < Number(tickUpper);
-
-          console.log(`${chainName}: Pool slot0 - sqrtPriceX96: ${sqrtPriceX96}, tick: ${currentTick}, inRange: ${inRange}`);
-
-          // Calculate token amounts
-          const amounts = getAmountsFromLiquidity(
-            liquidity as bigint,
-            sqrtPriceX96,
-            Number(tickLower),
-            Number(tickUpper),
-            token0Decimals,
-            token1Decimals
+      // Only fetch pool state for open positions (closed positions have no liquidity to calculate)
+      if (!isClosed) {
+        try {
+          const poolAddress = computeV3PoolAddress(
+            factoryAddress,
+            token0 as `0x${string}`,
+            token1 as `0x${string}`,
+            Number(fee)
           );
-          token0Amount = amounts.amount0;
-          token1Amount = amounts.amount1;
 
-          console.log(`${chainName}: Token amounts - ${token0Symbol}: ${token0Amount}, ${token1Symbol}: ${token1Amount}`);
+          console.log(`${chainName}: Pool address for ${token0Symbol}/${token1Symbol}: ${poolAddress}`);
 
-          // Calculate uncollected fees
-          if (tickLowerData && tickUpperData) {
-            // Extract feeGrowthOutside values from tick data
-            // Tick data: [liquidityGross, liquidityNet, feeGrowthOutside0X128, feeGrowthOutside1X128, ...]
-            const tickLowerFeeGrowthOutside0X128 = tickLowerData[2] as bigint || 0n;
-            const tickLowerFeeGrowthOutside1X128 = tickLowerData[3] as bigint || 0n;
-            const tickUpperFeeGrowthOutside0X128 = tickUpperData[2] as bigint || 0n;
-            const tickUpperFeeGrowthOutside1X128 = tickUpperData[3] as bigint || 0n;
+          // Fetch pool slot0, feeGrowthGlobal, and tick data for fee calculation
+          const poolDataContracts = [
+            { address: poolAddress, abi: POOL_ABI, functionName: 'slot0', chainId },
+            { address: poolAddress, abi: POOL_ABI, functionName: 'feeGrowthGlobal0X128', chainId },
+            { address: poolAddress, abi: POOL_ABI, functionName: 'feeGrowthGlobal1X128', chainId },
+            { address: poolAddress, abi: POOL_ABI, functionName: 'ticks', args: [Number(tickLower)], chainId },
+            { address: poolAddress, abi: POOL_ABI, functionName: 'ticks', args: [Number(tickUpper)], chainId },
+          ];
 
-            // Calculate feeGrowthInside
-            const { feeGrowthInside0X128, feeGrowthInside1X128 } = calculateFeeGrowthInside(
+          const poolDataResults = await readContracts(config, {
+            contracts: poolDataContracts as any,
+          });
+
+          const slot0 = poolDataResults[0]?.result as any;
+          const feeGrowthGlobal0X128 = poolDataResults[1]?.result as bigint || 0n;
+          const feeGrowthGlobal1X128 = poolDataResults[2]?.result as bigint || 0n;
+          const tickLowerData = poolDataResults[3]?.result as any;
+          const tickUpperData = poolDataResults[4]?.result as any;
+
+          if (slot0) {
+            const sqrtPriceX96 = slot0[0] as bigint;
+            currentTick = Number(slot0[1]);
+            inRange = currentTick >= Number(tickLower) && currentTick < Number(tickUpper);
+
+            console.log(`${chainName}: Pool slot0 - sqrtPriceX96: ${sqrtPriceX96}, tick: ${currentTick}, inRange: ${inRange}`);
+
+            // Calculate token amounts
+            const amounts = getAmountsFromLiquidity(
+              liquidity as bigint,
+              sqrtPriceX96,
               Number(tickLower),
               Number(tickUpper),
-              currentTick,
-              feeGrowthGlobal0X128,
-              feeGrowthGlobal1X128,
-              tickLowerFeeGrowthOutside0X128,
-              tickLowerFeeGrowthOutside1X128,
-              tickUpperFeeGrowthOutside0X128,
-              tickUpperFeeGrowthOutside1X128
-            );
-
-            // Calculate uncollected fees
-            const fees = calculateUncollectedFees(
-              liquidity as bigint,
-              feeGrowthInside0LastX128 as bigint,
-              feeGrowthInside1LastX128 as bigint,
-              feeGrowthInside0X128,
-              feeGrowthInside1X128,
-              tokensOwed0 as bigint,
-              tokensOwed1 as bigint,
               token0Decimals,
               token1Decimals
             );
-            uncollectedFees0 = fees.fees0;
-            uncollectedFees1 = fees.fees1;
+            token0Amount = amounts.amount0;
+            token1Amount = amounts.amount1;
 
-            console.log(`${chainName}: Uncollected fees - ${token0Symbol}: ${uncollectedFees0}, ${token1Symbol}: ${uncollectedFees1}`);
+            console.log(`${chainName}: Token amounts - ${token0Symbol}: ${token0Amount}, ${token1Symbol}: ${token1Amount}`);
+
+            // Calculate uncollected fees
+            if (tickLowerData && tickUpperData) {
+              // Extract feeGrowthOutside values from tick data
+              // Tick data: [liquidityGross, liquidityNet, feeGrowthOutside0X128, feeGrowthOutside1X128, ...]
+              const tickLowerFeeGrowthOutside0X128 = tickLowerData[2] as bigint || 0n;
+              const tickLowerFeeGrowthOutside1X128 = tickLowerData[3] as bigint || 0n;
+              const tickUpperFeeGrowthOutside0X128 = tickUpperData[2] as bigint || 0n;
+              const tickUpperFeeGrowthOutside1X128 = tickUpperData[3] as bigint || 0n;
+
+              // Calculate feeGrowthInside
+              const { feeGrowthInside0X128, feeGrowthInside1X128 } = calculateFeeGrowthInside(
+                Number(tickLower),
+                Number(tickUpper),
+                currentTick,
+                feeGrowthGlobal0X128,
+                feeGrowthGlobal1X128,
+                tickLowerFeeGrowthOutside0X128,
+                tickLowerFeeGrowthOutside1X128,
+                tickUpperFeeGrowthOutside0X128,
+                tickUpperFeeGrowthOutside1X128
+              );
+
+              // Calculate uncollected fees
+              const fees = calculateUncollectedFees(
+                liquidity as bigint,
+                feeGrowthInside0LastX128 as bigint,
+                feeGrowthInside1LastX128 as bigint,
+                feeGrowthInside0X128,
+                feeGrowthInside1X128,
+                tokensOwed0 as bigint,
+                tokensOwed1 as bigint,
+                token0Decimals,
+                token1Decimals
+              );
+              uncollectedFees0 = fees.fees0;
+              uncollectedFees1 = fees.fees1;
+
+              console.log(`${chainName}: Uncollected fees - ${token0Symbol}: ${uncollectedFees0}, ${token1Symbol}: ${uncollectedFees1}`);
+            }
           }
+        } catch (err) {
+          console.error(`${chainName}: Error fetching pool state:`, err);
         }
-      } catch (err) {
-        console.error(`${chainName}: Error fetching pool state:`, err);
+      } else {
+        console.log(`[AUDIT] ${chainName}: Including CLOSED position ${tokenId} (${token0Symbol}/${token1Symbol})`);
       }
 
       positionsWithTokenInfo.push({
@@ -509,6 +583,7 @@ async function fetchV3PositionsForChain(
         inRange,
         uncollectedFees0,
         uncollectedFees1,
+        isClosed,
         chainId,
         chainName,
       });
@@ -597,10 +672,42 @@ export function usePositions() {
             console.log(`Pool info for token ${tokenId}:`, poolAndPositionInfo);
             console.log(`Liquidity for token ${tokenId}:`, liquidity);
 
-            if (!poolAndPositionInfo || !liquidity) {
-              console.log(`Skipping token ${tokenId} - no pool info or zero liquidity`);
+            if (!poolAndPositionInfo) {
+              // V4 position NFT exists but on-chain data was cleared (fully withdrawn).
+              // Include as closed position so subgraph history (deposits, fees, P&L) is preserved.
+              console.log(`[AUDIT] V4 position ${tokenId}: on-chain data cleared (fully withdrawn) - including as CLOSED`);
+              v4PositionsConverted.push({
+                tokenId,
+                nonce: 0n,
+                operator: '0x0000000000000000000000000000000000000000',
+                token0: '',
+                token1: '',
+                fee: 0,
+                tickLower: 0,
+                tickUpper: 0,
+                liquidity: 0n,
+                feeGrowthInside0LastX128: 0n,
+                feeGrowthInside1LastX128: 0n,
+                tokensOwed0: 0n,
+                tokensOwed1: 0n,
+                token0Symbol: 'Unknown',
+                token1Symbol: 'Unknown',
+                token0Decimals: 18,
+                token1Decimals: 18,
+                version: 'v4',
+                token0Amount: 0,
+                token1Amount: 0,
+                currentTick: 0,
+                inRange: false,
+                uncollectedFees0: 0,
+                uncollectedFees1: 0,
+                isClosed: true,
+                chainId: v4ChainId,
+                chainName: v4ChainName,
+              });
               continue;
             }
+            const isClosed = !liquidity || liquidity === 0n;
 
             const [poolKey, positionInfoPacked] = poolAndPositionInfo;
 
@@ -631,7 +738,9 @@ export function usePositions() {
               ];
               const token0Info = await readContracts(config, { contracts: token0InfoContracts as any });
               token0Symbol = (token0Info[0]?.result as string) || 'UNKNOWN';
-              token0Decimals = Number(token0Info[1]?.result) || 18;
+              const t0DecRaw = token0Info[1]?.result;
+              token0Decimals = t0DecRaw != null ? Number(t0DecRaw) : (getWellKnownDecimals(token0) ?? 18);
+              if (t0DecRaw == null) console.warn(`[AUDIT] V4 decimals fallback: ${token0Symbol}=${token0Decimals}`);
             }
 
             if (!isToken1Native) {
@@ -641,31 +750,35 @@ export function usePositions() {
               ];
               const token1Info = await readContracts(config, { contracts: token1InfoContracts as any });
               token1Symbol = (token1Info[0]?.result as string) || 'UNKNOWN';
-              token1Decimals = Number(token1Info[1]?.result) || 18;
+              const t1DecRaw = token1Info[1]?.result;
+              token1Decimals = t1DecRaw != null ? Number(t1DecRaw) : (getWellKnownDecimals(token1) ?? 18);
+              if (t1DecRaw == null) console.warn(`[AUDIT] V4 decimals fallback: ${token1Symbol}=${token1Decimals}`);
             }
 
             console.log(`Token symbols: ${token0Symbol}/${token1Symbol}`);
+
+            // Compute poolId from poolKey (needed for both state reading and history matching)
+            const v4PoolId = computePoolId({
+              currency0: token0,
+              currency1: token1,
+              fee: fee,
+              tickSpacing: Number(poolKey.tickSpacing),
+              hooks: poolKey.hooks as string,
+            });
+            console.log(`Computed poolId: ${v4PoolId}`);
 
             // Fetch pool state from StateView to calculate token amounts and fees
             let token0Amount = 0;
             let token1Amount = 0;
             let currentTick = 0;
-            let inRange = true;
+            let inRange = !isClosed;
             let uncollectedFees0 = 0;
             let uncollectedFees1 = 0;
 
             const stateViewAddress = V4_STATE_VIEW_ADDRESSES[v4ChainId] as `0x${string}` | undefined;
-            if (stateViewAddress) {
+            if (stateViewAddress && !isClosed) {
               try {
-                // Compute poolId from poolKey
-                const poolId = computePoolId({
-                  currency0: token0,
-                  currency1: token1,
-                  fee: fee,
-                  tickSpacing: Number(poolKey.tickSpacing),
-                  hooks: poolKey.hooks as string,
-                });
-                console.log(`Computed poolId: ${poolId}`);
+                const poolId = v4PoolId;
 
                 // Get pool state (slot0)
                 const slot0Result = await readContracts(config, {
@@ -772,7 +885,7 @@ export function usePositions() {
               fee,
               tickLower,
               tickUpper,
-              liquidity,
+              liquidity: liquidity || 0n,
               feeGrowthInside0LastX128: BigInt(0),
               feeGrowthInside1LastX128: BigInt(0),
               tokensOwed0: BigInt(0),
@@ -788,10 +901,12 @@ export function usePositions() {
               inRange,
               uncollectedFees0,
               uncollectedFees1,
+              isClosed,
+              poolId: v4PoolId,
               chainId: v4ChainId,
               chainName: v4ChainName,
             });
-            console.log(`Successfully added V4 position ${tokenId}`);
+            console.log(`[AUDIT] ${isClosed ? 'CLOSED' : 'OPEN'} V4 position ${tokenId} added (pool: ${v4PoolId})`);
           } catch (err) {
             console.error(`Error fetching V4 position ${tokenId}:`, err);
             console.error('Full error details:', JSON.stringify(err, null, 2));

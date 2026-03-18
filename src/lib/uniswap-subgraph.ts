@@ -240,6 +240,13 @@ export async function fetchPositionsHistory(
     const positions = positionsData.data?.positions || [];
     const mints = mintsData.data?.mints || [];
 
+    // Log position ID mismatches for debugging
+    const returnedIds = new Set(positions.map((p: any) => p.id));
+    const missingIds = tokenIds.filter(id => !returnedIds.has(id.toString()));
+    if (missingIds.length > 0) {
+      console.warn(`[AUDIT] Subgraph missing ${missingIds.length}/${tokenIds.length} positions on chain ${chainId}:`, missingIds);
+    }
+
     // Calculate total deposited USD per position from mint events
     const depositedUSDByPosition = new Map<string, number>();
     for (const mint of mints) {

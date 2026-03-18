@@ -53,6 +53,9 @@ interface ModifyLiquidityEvent {
   amountUSD: string | null;
   tickLower: string;
   tickUpper: string;
+  pool?: {
+    id: string;
+  };
   transaction: {
     id: string;
   };
@@ -120,6 +123,9 @@ const MODIFY_LIQUIDITY_BY_ORIGIN_QUERY = gql`
       amountUSD
       tickLower
       tickUpper
+      pool {
+        id
+      }
       transaction {
         id
       }
@@ -461,7 +467,8 @@ async function fetchModifyLiquidityEvents(
 function calculateDepositsAndClaims(
   events: ModifyLiquidityEvent[],
   tickLower: number,
-  tickUpper: number
+  tickUpper: number,
+  poolId?: string
 ): { depositedToken0: number; depositedToken1: number; depositedUSD: number; claimedToken0: number; claimedToken1: number } {
   let depositedToken0 = 0;
   let depositedToken1 = 0;
@@ -469,10 +476,16 @@ function calculateDepositsAndClaims(
   let claimedToken0 = 0;
   let claimedToken1 = 0;
 
-  // Filter events matching this position's tick range
-  const matchingEvents = events.filter(
-    (e) => parseInt(e.tickLower) === tickLower && parseInt(e.tickUpper) === tickUpper
-  );
+  // Filter events matching this position's tick range and pool (if available)
+  const matchingEvents = events.filter((e) => {
+    const tickMatch = parseInt(e.tickLower) === tickLower && parseInt(e.tickUpper) === tickUpper;
+    if (!tickMatch) return false;
+    // If poolId provided and event has pool info, filter by pool to avoid cross-pool mixing
+    if (poolId && e.pool?.id) {
+      return e.pool.id.toLowerCase() === poolId.toLowerCase();
+    }
+    return true; // Graceful degradation if pool info unavailable
+  });
 
   // Track total deposited tokens to distinguish withdrawal of principal vs fee claims
   let cumulativeDeposited0 = 0;
@@ -560,7 +573,7 @@ export interface V4PositionsHistoryResult {
 export async function fetchV4PositionsHistory(
   tokenIds: string[],
   ownerAddress: string,
-  positions?: Array<{ tokenId: string; tickLower: number; tickUpper: number }>
+  positions?: Array<{ tokenId: string; tickLower: number; tickUpper: number; poolId?: string }>
 ): Promise<V4PositionsHistoryResult> {
   const results = new Map<string, V4PositionHistory>();
 
@@ -647,7 +660,34 @@ export async function fetchV4PositionsHistory(
         tickLower = positionInfo.tickLower;
         tickUpper = positionInfo.tickUpper;
 
-        const calculated = calculateDepositsAndClaims(modifyEvents, tickLower, tickUpper);
+        // For placeholder positions (Bug #9: on-chain data cleared), tick range is [0,0].
+        // Infer the real tick range from the first deposit event at the position's creation time.
+        // In V4, the NFT mint and first deposit happen in the same transaction (same timestamp).
+        if (tickLower === 0 && tickUpper === 0 && createdTimestamp > 0) {
+          const createdTimeSec = Math.floor(createdTimestamp / 1000); // convert ms to seconds
+          const firstDeposit = modifyEvents.find(e =>
+            parseInt(e.timestamp) === createdTimeSec && parseFloat(e.amount) > 0
+          );
+          if (firstDeposit) {
+            tickLower = parseInt(firstDeposit.tickLower);
+            tickUpper = parseInt(firstDeposit.tickUpper);
+            console.log(`[AUDIT] V4 position ${tokenId}: inferred tick range [${tickLower},${tickUpper}] from first deposit event at ${new Date(createdTimestamp).toISOString()}`);
+          } else {
+            // Fallback: find any deposit event closest to creation time
+            const sortedDeposits = modifyEvents
+              .filter(e => parseFloat(e.amount) > 0)
+              .sort((a, b) => Math.abs(parseInt(a.timestamp) - createdTimeSec) - Math.abs(parseInt(b.timestamp) - createdTimeSec));
+            if (sortedDeposits.length > 0) {
+              tickLower = parseInt(sortedDeposits[0].tickLower);
+              tickUpper = parseInt(sortedDeposits[0].tickUpper);
+              console.log(`[AUDIT] V4 position ${tokenId}: inferred tick range [${tickLower},${tickUpper}] from closest deposit event (${Math.abs(parseInt(sortedDeposits[0].timestamp) - createdTimeSec)}s delta)`);
+            } else {
+              console.warn(`[AUDIT] V4 position ${tokenId}: no deposit events found to infer tick range`);
+            }
+          }
+        }
+
+        const calculated = calculateDepositsAndClaims(modifyEvents, tickLower, tickUpper, positionInfo.poolId);
         depositedToken0 = calculated.depositedToken0;
         depositedToken1 = calculated.depositedToken1;
         depositedUSD = calculated.depositedUSD;

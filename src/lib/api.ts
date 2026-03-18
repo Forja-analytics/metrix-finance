@@ -96,6 +96,86 @@ export async function fetchTokenPrices(): Promise<Record<string, number>> {
   }
 }
 
+// Chain ID to CoinGecko platform ID mapping (for contract-based price lookups)
+const CHAIN_TO_COINGECKO_PLATFORM: Record<number, string> = {
+  1: 'ethereum',
+  42161: 'arbitrum-one',
+  137: 'polygon-pos',
+  10: 'optimistic-ethereum',
+  8453: 'base',
+  56: 'binance-smart-chain',
+};
+
+// Contract price cache (separate from symbol cache)
+let contractPriceCache: { prices: Record<string, number>; timestamp: number } | null = null;
+const CONTRACT_CACHE_DURATION = 60000; // 1 minute
+
+// Fetch token prices by contract address via CoinGecko
+// Used for tokens not in the hardcoded symbol list
+export async function fetchTokenPricesByContract(
+  tokens: Array<{ address: string; chainId: number; symbol: string }>
+): Promise<Record<string, number>> {
+  // Check cache
+  if (contractPriceCache && Date.now() - contractPriceCache.timestamp < CONTRACT_CACHE_DURATION) {
+    // Return cached prices for requested symbols if all are present
+    const allCached = tokens.every(t => t.symbol in contractPriceCache!.prices);
+    if (allCached) return contractPriceCache.prices;
+  }
+
+  const result: Record<string, number> = contractPriceCache?.prices || {};
+
+  // Group tokens by chainId/platform
+  const byPlatform = new Map<string, Array<{ address: string; symbol: string }>>();
+  for (const token of tokens) {
+    // Skip native ETH (zero address) and tokens already in result
+    if (token.address === '0x0000000000000000000000000000000000000000') continue;
+    if (result[token.symbol] && result[token.symbol] > 0) continue;
+
+    const platform = CHAIN_TO_COINGECKO_PLATFORM[token.chainId];
+    if (!platform) continue;
+
+    if (!byPlatform.has(platform)) {
+      byPlatform.set(platform, []);
+    }
+    byPlatform.get(platform)!.push({ address: token.address.toLowerCase(), symbol: token.symbol });
+  }
+
+  // Fetch prices for each platform (one call per chain, batched addresses)
+  for (const [platform, platformTokens] of byPlatform) {
+    if (platformTokens.length === 0) continue;
+
+    try {
+      const addresses = platformTokens.map(t => t.address).join(',');
+      const apiUrl = typeof window !== 'undefined'
+        ? `/api/proxy/coingecko?platform=${platform}&contract_addresses=${addresses}&vs_currencies=usd`
+        : `${COINGECKO_API}/simple/token_price/${platform}?contract_addresses=${addresses}&vs_currencies=usd`;
+
+      const response = await fetchWithTimeout(apiUrl, 10000);
+      if (!response.ok) {
+        console.log(`[CoinGecko] Contract price API error for ${platform}:`, response.status);
+        continue;
+      }
+
+      const data = await response.json();
+
+      // Map contract addresses back to symbols
+      for (const token of platformTokens) {
+        const price = data[token.address]?.usd;
+        if (price !== undefined && price > 0) {
+          result[token.symbol] = price;
+          console.log(`[AUDIT] Contract price for ${token.symbol}: $${price}`);
+        }
+      }
+    } catch (error) {
+      console.log(`[CoinGecko] Contract price fetch error for ${platform}:`, error instanceof Error ? error.message : 'unknown');
+    }
+  }
+
+  // Update cache
+  contractPriceCache = { prices: result, timestamp: Date.now() };
+  return result;
+}
+
 // Fetch market data from multiple APIs
 export async function fetchMarketData(): Promise<MarketData> {
   try {
