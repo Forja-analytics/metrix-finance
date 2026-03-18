@@ -209,6 +209,8 @@ export default function TrackPage() {
       if (isV4 && v4History) {
         // V4 position with history from V4 subgraph (ModifyLiquidity events)
         const hasDepositData = v4History.depositedToken0 > 0 || v4History.depositedToken1 > 0;
+        const posIsClosed = pos.isClosed || pos.liquidity === 0n;
+
         if (hasDepositData) {
           // HODL value = deposits at current prices
           const depositsAtCurrentPrices = (v4History.depositedToken0 * token0Price) + (v4History.depositedToken1 * token1Price);
@@ -224,15 +226,22 @@ export default function TrackPage() {
             console.warn(`[AUDIT] V4 position ${pos.tokenId}: invalid originalInvestment, using fallback`);
           }
 
-          totalOriginalInvestment += originalInvestment;
-          totalHodlValue += depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+          // Only count deposits for OPEN positions as current investment basis.
+          // Closed positions had their capital returned via withdrawal — their deposit
+          // should not inflate totalOriginalInvestment or P&L will be wildly negative.
+          if (!posIsClosed) {
+            totalOriginalInvestment += originalInvestment;
+            totalHodlValue += depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+          }
 
-          // Add claimed fees from V4 subgraph
+          // Add claimed fees from V4 subgraph (for both open and closed positions)
           totalClaimedFees += (v4History.claimedToken0 * token0Price) + (v4History.claimedToken1 * token1Price);
         } else {
-          // Fallback to current value if no deposit data
-          totalOriginalInvestment += positionValue > 0 ? positionValue : 0;
-          totalHodlValue += positionValue > 0 ? positionValue : 0;
+          // Fallback to current value if no deposit data (only for open positions)
+          if (!posIsClosed) {
+            totalOriginalInvestment += positionValue > 0 ? positionValue : 0;
+            totalHodlValue += positionValue > 0 ? positionValue : 0;
+          }
         }
 
         // Track position age from mint transaction
@@ -259,6 +268,7 @@ export default function TrackPage() {
         totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
       } else if (!isV4 && v3History) {
         // V3 position with history from The Graph
+        const posIsClosed = pos.isClosed || pos.liquidity === 0n;
         // HODL value = deposits at current prices
         const depositsAtCurrentPrices = (v3History.depositedToken0 * token0Price) + (v3History.depositedToken1 * token1Price);
 
@@ -273,10 +283,14 @@ export default function TrackPage() {
           console.warn(`[AUDIT] V3 position ${pos.tokenId}: invalid originalInvestment, using fallback`);
         }
 
-        totalOriginalInvestment += originalInvestment;
-        totalHodlValue += depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+        // Only count deposits for OPEN positions as current investment basis.
+        // Closed positions had their capital returned via withdrawal.
+        if (!posIsClosed) {
+          totalOriginalInvestment += originalInvestment;
+          totalHodlValue += depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+        }
 
-        // Claimed fees
+        // Claimed fees (count for both open and closed)
         totalClaimedFees += (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
 
         // Track position age - validate timestamp is valid
@@ -301,9 +315,12 @@ export default function TrackPage() {
         const posClaimedUSD = (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
         totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
       } else {
-        // No history available - estimate deposits as current value
-        totalOriginalInvestment += positionValue;
-        totalHodlValue += positionValue;
+        // No history available - estimate deposits as current value (only for open positions)
+        const posIsClosed = pos.isClosed || pos.liquidity === 0n;
+        if (!posIsClosed) {
+          totalOriginalInvestment += positionValue;
+          totalHodlValue += positionValue;
+        }
 
         // Per-position daily earnings (unclaimed only, no history for claimed)
         const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
