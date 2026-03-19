@@ -192,6 +192,9 @@ export default function TrackPage() {
     let openUnclaimedFees = 0;
     let openClaimedFees = 0;
 
+    // Track oldest OPEN position timestamp (for APR and projections)
+    let oldestOpenTimestamp = Date.now();
+
     walletPositions.forEach(pos => {
       const token0Symbol = pos.token0Symbol || 'ETH';
       const token1Symbol = pos.token1Symbol || '';
@@ -271,6 +274,9 @@ export default function TrackPage() {
         if (validTimestamp && validTimestamp < oldestPositionTimestamp) {
           oldestPositionTimestamp = validTimestamp;
         }
+        if (!posIsClosed && validTimestamp && validTimestamp < oldestOpenTimestamp) {
+          oldestOpenTimestamp = validTimestamp;
+        }
 
         // Calculate position age, with minimum 1 day per position to prevent APR inflation
         const rawAgeDays = validTimestamp
@@ -278,11 +284,6 @@ export default function TrackPage() {
           : 30; // Default to 30 days if no valid timestamp
         const positionAgeDays = Math.max(1, rawAgeDays); // Minimum 1 day per position
         totalPositionAgeDays += positionAgeDays;
-
-        // Per-position daily earnings for accurate portfolio APR
-        const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
-        const posClaimedUSD = (v4History.claimedToken0 * token0Price) + (v4History.claimedToken1 * token1Price);
-        totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
       } else if (!isV4 && v3History) {
         // V3 position with history from The Graph
         // HODL value = deposits at current prices
@@ -311,6 +312,9 @@ export default function TrackPage() {
         if (validTimestamp && validTimestamp < oldestPositionTimestamp) {
           oldestPositionTimestamp = validTimestamp;
         }
+        if (!posIsClosed && validTimestamp && validTimestamp < oldestOpenTimestamp) {
+          oldestOpenTimestamp = validTimestamp;
+        }
 
         // Calculate position age, with minimum 1 day per position to prevent APR inflation
         const rawAgeDays = validTimestamp
@@ -318,11 +322,6 @@ export default function TrackPage() {
           : 30; // Default to 30 days if no valid timestamp
         const positionAgeDays = Math.max(1, rawAgeDays); // Minimum 1 day per position
         totalPositionAgeDays += positionAgeDays;
-
-        // Per-position daily earnings for accurate portfolio APR
-        const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
-        const posClaimedUSD = (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
-        totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
       } else {
         // No history available - estimate deposits as current value (only for open positions)
         if (!posIsClosed) {
@@ -330,10 +329,7 @@ export default function TrackPage() {
           totalHodlValue += positionValue;
         }
 
-        // Per-position daily earnings (unclaimed only, no history for claimed)
-        const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
-        const defaultAgeDays = 30; // Default to 30 days if no history
-        totalDailyEarnings += posUnclaimedUSD / defaultAgeDays;
+        // No history — cannot contribute to daily earnings calculation
       }
     });
 
@@ -356,6 +352,7 @@ export default function TrackPage() {
       openTotalValue,
       openUnclaimedFees,
       openClaimedFees,
+      oldestOpenTimestamp,
     };
   }, [walletPositions, prices, positionHistories, v4PositionHistories]);
 
@@ -404,12 +401,12 @@ export default function TrackPage() {
   // ROI: Total profit relative to initial investment
   const roi = totalOriginalInvestment > 0 ? (profitLoss / totalOriginalInvestment) * 100 : 0;
 
-  // APR calculation: uses sum of per-position daily earnings for accurate portfolio yield
-  // Each position's daily earnings = (unclaimed + claimed) / positionAgeDays
-  // APR base = current portfolio value (yield rate on current capital)
+  // APR = (totalEarnings / openPositionAge) * 365 / currentValue * 100
+  // Uses age of oldest OPEN position as the earnings window
+  const openPositionAgeDays = Math.max(1, (Date.now() - walletPositionsTotals.oldestOpenTimestamp) / (1000 * 60 * 60 * 24));
+  const dailyEarningsRate = totalEarnings / openPositionAgeDays;
   const aprBase = Math.max(totalValue, 1);
-  const rawApr = (walletPositionsTotals.totalDailyEarnings * 365 / aprBase) * 100;
-  // Cap APR at reasonable maximum (10,000%) to prevent display of absurd values from edge cases
+  const rawApr = (dailyEarningsRate * 365 / aprBase) * 100;
   const apr = Math.min(rawApr, 10000);
 
   // Debug logging
@@ -424,11 +421,10 @@ export default function TrackPage() {
     positionCount: walletPositions.length,
   });
 
-  // Projections based on actual daily earnings rate (not compound, not derived from APR)
-  // Uses the direct sum of per-position daily earnings for accuracy
-  const projection24h = walletPositionsTotals.totalDailyEarnings;
-  const projection7d = walletPositionsTotals.totalDailyEarnings * 7;
-  const projection30d = walletPositionsTotals.totalDailyEarnings * 30;
+  // Projections based on daily earnings rate (totalEarnings / openPositionAge)
+  const projection24h = dailyEarningsRate;
+  const projection7d = dailyEarningsRate * 7;
+  const projection30d = dailyEarningsRate * 30;
 
   // Filter positions based on search and filters
   const filteredPositions = useMemo(() => {

@@ -253,10 +253,8 @@ export function WalletPositionCard({ position, prices: externalPrices, positionH
   // This ensures APR is never artificially inflated by bad subgraph data
   const safeOriginalInvestment = Math.max(originalInvestmentUSD, totalValueUSD, 1);
 
-  // Profit/Loss = Total Current Value (position + fees) - Original Investment
-  // This is the actual capital gain/loss
-  const currentTotalValue = totalValueUSD + unclaimedFeesUSD + claimedFeesUSD;
-  const profitLoss = currentTotalValue - safeOriginalInvestment;
+  // Profit/Loss = Current Value + Accumulated Earnings - Deposits
+  const profitLoss = totalValueUSD + earnings - safeOriginalInvestment;
 
   // HODL value = original deposits valued at current prices
   const hodlValue = depositsAtCurrentPrices;
