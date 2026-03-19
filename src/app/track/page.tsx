@@ -262,10 +262,12 @@ export default function TrackPage() {
         const positionAgeDays = Math.max(1, rawAgeDays); // Minimum 1 day per position
         totalPositionAgeDays += positionAgeDays;
 
-        // Per-position daily earnings for accurate portfolio APR
-        const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
-        const posClaimedUSD = (v4History.claimedToken0 * token0Price) + (v4History.claimedToken1 * token1Price);
-        totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
+        // Per-position daily earnings for portfolio APR (only OPEN positions generate yield)
+        if (!posIsClosed) {
+          const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
+          const posClaimedUSD = (v4History.claimedToken0 * token0Price) + (v4History.claimedToken1 * token1Price);
+          totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
+        }
       } else if (!isV4 && v3History) {
         // V3 position with history from The Graph
         const posIsClosed = pos.isClosed || pos.liquidity === 0n;
@@ -310,10 +312,12 @@ export default function TrackPage() {
         const positionAgeDays = Math.max(1, rawAgeDays); // Minimum 1 day per position
         totalPositionAgeDays += positionAgeDays;
 
-        // Per-position daily earnings for accurate portfolio APR
-        const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
-        const posClaimedUSD = (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
-        totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
+        // Per-position daily earnings for portfolio APR (only OPEN positions generate yield)
+        if (!posIsClosed) {
+          const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
+          const posClaimedUSD = (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
+          totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
+        }
       } else {
         // No history available - estimate deposits as current value (only for open positions)
         const posIsClosed = pos.isClosed || pos.liquidity === 0n;
@@ -322,10 +326,12 @@ export default function TrackPage() {
           totalHodlValue += positionValue;
         }
 
-        // Per-position daily earnings (unclaimed only, no history for claimed)
-        const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
-        const defaultAgeDays = 30; // Default to 30 days if no history
-        totalDailyEarnings += posUnclaimedUSD / defaultAgeDays;
+        // Per-position daily earnings (only for open positions)
+        if (!posIsClosed) {
+          const posUnclaimedUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
+          const defaultAgeDays = 30;
+          totalDailyEarnings += posUnclaimedUSD / defaultAgeDays;
+        }
       }
     });
 

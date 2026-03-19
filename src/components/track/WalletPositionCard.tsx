@@ -249,15 +249,10 @@ export function WalletPositionCard({ position, prices: externalPrices, positionH
   // Total earnings = unclaimed + claimed fees
   const earnings = unclaimedFeesUSD + claimedFeesUSD;
 
-  // Safety check: ensure originalInvestmentUSD is reasonable for APR calculation
-  // Use the HIGHER of: calculated investment OR current position value
-  // This ensures APR is never artificially inflated by bad subgraph data
-  const safeOriginalInvestment = Math.max(originalInvestmentUSD, totalValueUSD, 1);
-
   // Profit/Loss = Total Current Value (position + fees) - Original Investment
   // This is the actual capital gain/loss
   const currentTotalValue = totalValueUSD + unclaimedFeesUSD + claimedFeesUSD;
-  const profitLoss = currentTotalValue - safeOriginalInvestment;
+  const profitLoss = currentTotalValue - originalInvestmentUSD;
 
   // HODL value = original deposits valued at current prices
   const hodlValue = depositsAtCurrentPrices;
