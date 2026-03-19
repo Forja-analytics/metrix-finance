@@ -25,7 +25,6 @@ export function Navbar() {
     { href: '/', label: t('discover') },
     { href: '/simulate', label: t('simulate') },
     { href: '/track', label: t('track') },
-    { href: '/pricing', label: t('pricing') },
   ];
 
   return (
