@@ -55,8 +55,6 @@ interface ModifyLiquidityEvent {
   tickUpper: string;
   pool?: {
     id: string;
-    token0?: { id: string; symbol: string; decimals: string };
-    token1?: { id: string; symbol: string; decimals: string };
   };
   transaction: {
     id: string;
@@ -127,8 +125,6 @@ const MODIFY_LIQUIDITY_BY_ORIGIN_QUERY = gql`
       tickUpper
       pool {
         id
-        token0 { id symbol decimals }
-        token1 { id symbol decimals }
       }
       transaction {
         id
@@ -136,69 +132,6 @@ const MODIFY_LIQUIDITY_BY_ORIGIN_QUERY = gql`
     }
   }
 `;
-
-// ERC20 Transfer event topic
-const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-const WETH_ADDRESS = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2';
-const NATIVE_ETH_ADDRESS = '0x0000000000000000000000000000000000000000';
-const PUBLIC_RPCS = [
-  'https://ethereum-rpc.publicnode.com',
-  'https://cloudflare-eth.com',
-  'https://rpc.mevblocker.io',
-];
-
-// Resolve actual claimed fee amounts from V4 fee-claim transactions via RPC.
-// V4 fee collections report amount0=0, amount1=0 in ModifyLiquidity events because
-// the token transfer happens in the settle/take step, not in modifyLiquidity.
-async function fetchClaimedFeesFromRPC(
-  feeClaimTxHashes: string[],
-  ownerAddress: string,
-  token0Address: string,
-  token1Address: string,
-  token0Decimals: number,
-  token1Decimals: number
-): Promise<{ claimedToken0: number; claimedToken1: number }> {
-  if (feeClaimTxHashes.length === 0) return { claimedToken0: 0, claimedToken1: 0 };
-
-  const owner = ownerAddress.toLowerCase();
-  const t0 = token0Address.toLowerCase() === NATIVE_ETH_ADDRESS ? WETH_ADDRESS : token0Address.toLowerCase();
-  const t1 = token1Address.toLowerCase() === NATIVE_ETH_ADDRESS ? WETH_ADDRESS : token1Address.toLowerCase();
-  let claimedToken0 = 0;
-  let claimedToken1 = 0;
-
-  for (const rpcUrl of PUBLIC_RPCS) {
-    try {
-      let allSucceeded = true;
-      for (const txHash of feeClaimTxHashes) {
-        const res = await fetch(rpcUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getTransactionReceipt', params: [txHash], id: 1 }),
-        });
-        const data = await res.json();
-        const receipt = data.result;
-        if (!receipt) { allSucceeded = false; break; }
-
-        for (const log of receipt.logs) {
-          if (log.topics[0] !== ERC20_TRANSFER_TOPIC || log.topics.length < 3) continue;
-          const to = ('0x' + log.topics[2].slice(26)).toLowerCase();
-          if (to !== owner) continue;
-          const tokenAddr = log.address.toLowerCase();
-          const rawValue = BigInt(log.data);
-          if (tokenAddr === t0) claimedToken0 += Number(rawValue) / Math.pow(10, token0Decimals);
-          else if (tokenAddr === t1) claimedToken1 += Number(rawValue) / Math.pow(10, token1Decimals);
-        }
-      }
-      if (allSucceeded) {
-        console.log(`[V4 RPC] Resolved ${feeClaimTxHashes.length} fee claims: token0=${claimedToken0}, token1=${claimedToken1}`);
-        return { claimedToken0, claimedToken1 };
-      }
-    } catch (e) {
-      console.log(`[V4 RPC] ${rpcUrl} failed: ${e instanceof Error ? e.message : 'unknown'}`);
-    }
-  }
-  return { claimedToken0: 0, claimedToken1: 0 };
-}
 
 // Query ModifyLiquidity events filtered by tick range (for matching to specific position)
 const MODIFY_LIQUIDITY_BY_TICKS_QUERY = gql`
@@ -760,33 +693,6 @@ export async function fetchV4PositionsHistory(
         depositedUSD = calculated.depositedUSD;
         claimedToken0 = calculated.claimedToken0;
         claimedToken1 = calculated.claimedToken1;
-
-        // Resolve pure fee claims (amount=0, amount0=0, amount1=0) via RPC
-        // V4 subgraph doesn't capture token amounts for fee collections
-        const posMatchingEvents = modifyEvents.filter((e) => {
-          const tickMatch = parseInt(e.tickLower) === tickLower && parseInt(e.tickUpper) === tickUpper;
-          if (!tickMatch) return false;
-          if (positionInfo.poolId && e.pool?.id) return e.pool.id.toLowerCase() === positionInfo.poolId.toLowerCase();
-          return true;
-        });
-        const zeroAmountClaims = posMatchingEvents.filter(e => {
-          return parseFloat(e.amount) === 0 && parseFloat(e.amount0) === 0 && parseFloat(e.amount1) === 0;
-        });
-        if (zeroAmountClaims.length > 0) {
-          const poolEvent = posMatchingEvents.find(e => e.pool?.token0?.id && e.pool?.token1?.id);
-          if (poolEvent?.pool?.token0 && poolEvent?.pool?.token1) {
-            const txHashes = zeroAmountClaims.map(e => e.transaction.id);
-            console.log(`[V4] Position ${tokenId}: resolving ${zeroAmountClaims.length} fee claims via RPC...`);
-            const rpcFees = await fetchClaimedFeesFromRPC(
-              txHashes, ownerAddress,
-              poolEvent.pool.token0.id, poolEvent.pool.token1.id,
-              parseInt(poolEvent.pool.token0.decimals) || 18,
-              parseInt(poolEvent.pool.token1.decimals) || 18
-            );
-            claimedToken0 += rpcFees.claimedToken0;
-            claimedToken1 += rpcFees.claimedToken1;
-          }
-        }
 
         console.log(`V4 Position ${tokenId} (ticks ${tickLower}-${tickUpper}): deposits=${depositedToken0}/${depositedToken1} ($${depositedUSD}), claims=${claimedToken0}/${claimedToken1}`);
       }
