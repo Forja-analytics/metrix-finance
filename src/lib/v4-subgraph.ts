@@ -55,6 +55,8 @@ interface ModifyLiquidityEvent {
   tickUpper: string;
   pool?: {
     id: string;
+    token0?: { id: string; symbol: string; decimals: string };
+    token1?: { id: string; symbol: string; decimals: string };
   };
   transaction: {
     id: string;
@@ -125,6 +127,8 @@ const MODIFY_LIQUIDITY_BY_ORIGIN_QUERY = gql`
       tickUpper
       pool {
         id
+        token0 { id symbol decimals }
+        token1 { id symbol decimals }
       }
       transaction {
         id
@@ -459,6 +463,96 @@ async function fetchModifyLiquidityEvents(
   }
 }
 
+// ERC20 Transfer event topic (keccak256 of "Transfer(address,address,uint256)")
+const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+// WETH address on Ethereum mainnet — V4 uses address(0) for native ETH in pool tokens,
+// but on-chain fee claims transfer WETH, so we need to map 0x0 → WETH for matching.
+const WETH_ADDRESS = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2';
+const NATIVE_ETH_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+// Public Ethereum RPC endpoints (fallback chain)
+const PUBLIC_RPCS = [
+  'https://ethereum-rpc.publicnode.com',
+  'https://cloudflare-eth.com',
+  'https://rpc.mevblocker.io',
+];
+
+// Fetch actual claimed fee amounts from V4 fee-claim transactions via RPC.
+// The V4 subgraph reports amount0=0, amount1=0 for pure fee collections because
+// the token transfer happens in the settle/take step, not in modifyLiquidity.
+// This function reads ERC20 Transfer logs from the tx receipt to get real amounts.
+async function fetchClaimedFeesFromRPC(
+  feeClaimTxHashes: string[],
+  ownerAddress: string,
+  token0Address: string,
+  token1Address: string,
+  token0Decimals: number,
+  token1Decimals: number
+): Promise<{ claimedToken0: number; claimedToken1: number }> {
+  if (feeClaimTxHashes.length === 0) return { claimedToken0: 0, claimedToken1: 0 };
+
+  const owner = ownerAddress.toLowerCase();
+  // V4 uses address(0) for native ETH, but on-chain fee claims use WETH
+  const t0 = token0Address.toLowerCase() === NATIVE_ETH_ADDRESS ? WETH_ADDRESS : token0Address.toLowerCase();
+  const t1 = token1Address.toLowerCase() === NATIVE_ETH_ADDRESS ? WETH_ADDRESS : token1Address.toLowerCase();
+  let claimedToken0 = 0;
+  let claimedToken1 = 0;
+
+  // Try each RPC until one works
+  for (const rpcUrl of PUBLIC_RPCS) {
+    try {
+      let allSucceeded = true;
+
+      for (const txHash of feeClaimTxHashes) {
+        const res = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'eth_getTransactionReceipt',
+            params: [txHash],
+            id: 1,
+          }),
+        });
+        const data = await res.json();
+        const receipt = data.result;
+
+        if (!receipt) {
+          allSucceeded = false;
+          break;
+        }
+
+        // Parse ERC20 Transfer logs for tokens sent to the wallet owner
+        for (const log of receipt.logs) {
+          if (log.topics[0] !== ERC20_TRANSFER_TOPIC || log.topics.length < 3) continue;
+          const to = ('0x' + log.topics[2].slice(26)).toLowerCase();
+          if (to !== owner) continue;
+
+          const tokenAddr = log.address.toLowerCase();
+          const rawValue = BigInt(log.data);
+
+          if (tokenAddr === t0) {
+            claimedToken0 += Number(rawValue) / Math.pow(10, token0Decimals);
+          } else if (tokenAddr === t1) {
+            claimedToken1 += Number(rawValue) / Math.pow(10, token1Decimals);
+          }
+        }
+      }
+
+      if (allSucceeded) {
+        console.log(`[V4 RPC] Resolved ${feeClaimTxHashes.length} fee claims via ${rpcUrl}: token0=${claimedToken0}, token1=${claimedToken1}`);
+        return { claimedToken0, claimedToken1 };
+      }
+    } catch (e) {
+      console.log(`[V4 RPC] ${rpcUrl} failed: ${e instanceof Error ? e.message : 'unknown'}`);
+    }
+  }
+
+  console.warn(`[V4 RPC] Could not resolve fee claims from any RPC`);
+  return { claimedToken0: 0, claimedToken1: 0 };
+}
+
 // Calculate deposits and claims from ModifyLiquidity events for a specific tick range
 // IMPORTANT: In V4, ModifyLiquidity events represent both liquidity changes AND fee claims.
 // When `amount` (liquidityDelta) is 0 but amount0/amount1 are non-zero, this is a pure fee collection.
@@ -693,6 +787,41 @@ export async function fetchV4PositionsHistory(
         depositedUSD = calculated.depositedUSD;
         claimedToken0 = calculated.claimedToken0;
         claimedToken1 = calculated.claimedToken1;
+
+        // Step 5: Resolve fee claims with 0 amounts via RPC (V4 subgraph limitation)
+        // V4 fee collections report amount0=0, amount1=0 in ModifyLiquidity events because
+        // the actual token transfer happens in the settle/take step, not modifyLiquidity.
+        const matchingEvents = modifyEvents.filter((e) => {
+          const tickMatch = parseInt(e.tickLower) === tickLower && parseInt(e.tickUpper) === tickUpper;
+          if (!tickMatch) return false;
+          if (positionInfo.poolId && e.pool?.id) {
+            return e.pool.id.toLowerCase() === positionInfo.poolId.toLowerCase();
+          }
+          return true;
+        });
+        const zeroAmountClaims = matchingEvents.filter(e => {
+          const liqDelta = parseFloat(e.amount);
+          const a0 = parseFloat(e.amount0);
+          const a1 = parseFloat(e.amount1);
+          return liqDelta === 0 && a0 === 0 && a1 === 0;
+        });
+
+        if (zeroAmountClaims.length > 0) {
+          // Get token addresses from pool data in events
+          const poolEvent = matchingEvents.find(e => e.pool?.token0?.id && e.pool?.token1?.id);
+          if (poolEvent?.pool?.token0 && poolEvent?.pool?.token1) {
+            const t0Addr = poolEvent.pool.token0.id;
+            const t1Addr = poolEvent.pool.token1.id;
+            const t0Dec = parseInt(poolEvent.pool.token0.decimals) || 18;
+            const t1Dec = parseInt(poolEvent.pool.token1.decimals) || 18;
+            const txHashes = zeroAmountClaims.map(e => e.transaction.id);
+
+            console.log(`[V4] Position ${tokenId}: ${zeroAmountClaims.length} fee claims with 0 amounts, resolving via RPC...`);
+            const rpcFees = await fetchClaimedFeesFromRPC(txHashes, ownerAddress, t0Addr, t1Addr, t0Dec, t1Dec);
+            claimedToken0 += rpcFees.claimedToken0;
+            claimedToken1 += rpcFees.claimedToken1;
+          }
+        }
 
         console.log(`V4 Position ${tokenId} (ticks ${tickLower}-${tickUpper}): deposits=${depositedToken0}/${depositedToken1} ($${depositedUSD}), claims=${claimedToken0}/${claimedToken1}`);
       }
