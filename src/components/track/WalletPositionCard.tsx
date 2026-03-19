@@ -249,11 +249,10 @@ export function WalletPositionCard({ position, prices: externalPrices, positionH
   // Total earnings = unclaimed + claimed fees
   const earnings = unclaimedFeesUSD + claimedFeesUSD;
 
-  // Safety check: only guard against clearly invalid data (NaN, zero, negative)
-  // Use original deposit as-is for accurate APR and P&L — do NOT inflate with current value
-  const safeOriginalInvestment = (isNaN(originalInvestmentUSD) || originalInvestmentUSD <= 0)
-    ? Math.max(totalValueUSD, 1)
-    : originalInvestmentUSD;
+  // Safety check: ensure originalInvestmentUSD is reasonable for APR calculation
+  // Use the HIGHER of: calculated investment OR current position value
+  // This ensures APR is never artificially inflated by bad subgraph data
+  const safeOriginalInvestment = Math.max(originalInvestmentUSD, totalValueUSD, 1);
 
   // Profit/Loss = Total Current Value (position + fees) - Original Investment
   // This is the actual capital gain/loss
@@ -286,10 +285,10 @@ export function WalletPositionCard({ position, prices: externalPrices, positionH
   // Ensure minimum 1 day for APR calculation - this prevents inflated APR for new positions
   const positionAgeDays = Math.max(1, rawPositionAgeDays);
 
-  // APR = (earnings / days) * 365 / initialDeposit * 100
-  // Use initial deposit as base — APR measures return on invested capital, not current value
+  // APR = (earnings / days) * 365 / current liquidity * 100
+  // Use current liquidity value for APR (yield rate on current capital)
   // Cap APR at reasonable maximum (10,000%) to prevent display of absurd values from edge cases
-  const aprBase = Math.max(safeOriginalInvestment, 1);
+  const aprBase = Math.max(totalValueUSD, 1);
   const rawApr = ((earnings / positionAgeDays) * 365 / aprBase) * 100;
   const apr = Math.min(rawApr, 10000); // Cap at 10,000% APR
 
