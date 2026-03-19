@@ -596,14 +596,17 @@ async function fetchV3PositionsForChain(
   }
 }
 
-export function usePositions() {
-  const { address, isConnected } = useAccount();
+export function usePositions(addressOverride?: `0x${string}` | null) {
+  const { address: connectedAddress, isConnected } = useAccount();
   const chainId = useChainId();
   const config = useConfig();
   const [positions, setPositions] = useState<OnChainPosition[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [totalPositionCount, setTotalPositionCount] = useState(0);
+
+  // Use override address if provided, otherwise use connected wallet
+  const address = addressOverride || connectedAddress;
 
   const fetchPositions = useCallback(async () => {
     console.log('fetchPositions called - fetching from ALL chains', { address });
@@ -931,10 +934,10 @@ export function usePositions() {
   }, [address, config]);
 
   useEffect(() => {
-    if (isConnected) {
+    if (isConnected || addressOverride) {
       fetchPositions();
     }
-  }, [isConnected, fetchPositions]);
+  }, [isConnected, addressOverride, fetchPositions]);
 
   return {
     positions,

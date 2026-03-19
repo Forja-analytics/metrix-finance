@@ -21,13 +21,23 @@ import { fetchV4PositionsHistory, V4PositionHistory } from '@/lib/v4-subgraph';
 
 export default function TrackPage() {
   const t = useTranslation();
-  const { address, isConnected } = useAccount();
-  const { positions: walletPositions, isLoading: isLoadingWallet, refetch, positionCount } = usePositions();
+  const { address: connectedAddress, isConnected } = useAccount();
   const { trackedPositions, addTrackedPosition, removeTrackedPosition } = useStore();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'wallet' | 'v4lookup' | 'manual'>('wallet');
   const [positionFilter, setPositionFilter] = useState<'opened' | 'closed' | 'all'>('opened');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Manual wallet address for testing
+  const [manualAddress, setManualAddress] = useState('');
+  const [useManualAddress, setUseManualAddress] = useState(false);
+  const manualAddr = useManualAddress && /^0x[a-fA-F0-9]{40}$/.test(manualAddress)
+    ? (manualAddress as `0x${string}`)
+    : null;
+
+  // Use manual address override if active, otherwise connected wallet
+  const address = manualAddr || connectedAddress;
+  const { positions: walletPositions, isLoading: isLoadingWallet, refetch, positionCount } = usePositions(manualAddr);
   const [networkFilter, setNetworkFilter] = useState<string>('all');
   const [exchangeFilter, setExchangeFilter] = useState<string>('all');
   const [prices, setPrices] = useState<Record<string, number>>({});
@@ -177,6 +187,11 @@ export default function TrackPage() {
     let totalHodlValue = 0; // Deposits valued at current prices (for HODL/IL calc)
     let totalDailyEarnings = 0; // Sum of per-position daily earnings for accurate portfolio APR
 
+    // Open-only totals for P&L card (closed positions should not affect P&L)
+    let openTotalValue = 0;
+    let openUnclaimedFees = 0;
+    let openClaimedFees = 0;
+
     walletPositions.forEach(pos => {
       const token0Symbol = pos.token0Symbol || 'ETH';
       const token1Symbol = pos.token1Symbol || '';
@@ -189,6 +204,9 @@ export default function TrackPage() {
       const positionValue = (token0Amount * token0Price) + (token1Amount * token1Price);
       totalValue += positionValue;
 
+      // Determine if position is closed (no liquidity)
+      const posIsClosed = pos.isClosed || pos.liquidity === 0n;
+
       // Count position types
       if (pos.version === 'v4') {
         v4Count++;
@@ -199,7 +217,14 @@ export default function TrackPage() {
       // Use pre-calculated uncollected fees (works for both V3 and V4)
       const uncollectedFees0 = pos.uncollectedFees0 || 0;
       const uncollectedFees1 = pos.uncollectedFees1 || 0;
-      totalUnclaimedFees += (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
+      const posUnclaimedFeesUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
+      totalUnclaimedFees += posUnclaimedFeesUSD;
+
+      // Track open-only totals for P&L card
+      if (!posIsClosed) {
+        openTotalValue += positionValue;
+        openUnclaimedFees += posUnclaimedFeesUSD;
+      }
 
       // Get historical data - use V3 subgraph for V3, V4 subgraph for V4
       const isV4 = pos.version === 'v4';
@@ -209,7 +234,6 @@ export default function TrackPage() {
       if (isV4 && v4History) {
         // V4 position with history from V4 subgraph (ModifyLiquidity events)
         const hasDepositData = v4History.depositedToken0 > 0 || v4History.depositedToken1 > 0;
-        const posIsClosed = pos.isClosed || pos.liquidity === 0n;
 
         if (hasDepositData) {
           // HODL value = deposits at current prices
@@ -235,7 +259,9 @@ export default function TrackPage() {
           }
 
           // Add claimed fees from V4 subgraph (for both open and closed positions)
-          totalClaimedFees += (v4History.claimedToken0 * token0Price) + (v4History.claimedToken1 * token1Price);
+          const v4ClaimedUSD = (v4History.claimedToken0 * token0Price) + (v4History.claimedToken1 * token1Price);
+          totalClaimedFees += v4ClaimedUSD;
+          if (!posIsClosed) openClaimedFees += v4ClaimedUSD;
         } else {
           // Fallback to current value if no deposit data (only for open positions)
           if (!posIsClosed) {
@@ -268,7 +294,6 @@ export default function TrackPage() {
         totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
       } else if (!isV4 && v3History) {
         // V3 position with history from The Graph
-        const posIsClosed = pos.isClosed || pos.liquidity === 0n;
         // HODL value = deposits at current prices
         const depositsAtCurrentPrices = (v3History.depositedToken0 * token0Price) + (v3History.depositedToken1 * token1Price);
 
@@ -291,7 +316,9 @@ export default function TrackPage() {
         }
 
         // Claimed fees (count for both open and closed)
-        totalClaimedFees += (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
+        const v3ClaimedUSD = (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
+        totalClaimedFees += v3ClaimedUSD;
+        if (!posIsClosed) openClaimedFees += v3ClaimedUSD;
 
         // Track position age - validate timestamp is valid
         const now = Date.now();
@@ -316,7 +343,6 @@ export default function TrackPage() {
         totalDailyEarnings += (posUnclaimedUSD + posClaimedUSD) / positionAgeDays;
       } else {
         // No history available - estimate deposits as current value (only for open positions)
-        const posIsClosed = pos.isClosed || pos.liquidity === 0n;
         if (!posIsClosed) {
           totalOriginalInvestment += positionValue;
           totalHodlValue += positionValue;
@@ -344,6 +370,10 @@ export default function TrackPage() {
       oldestPositionTimestamp,
       avgPositionAgeDays,
       totalDailyEarnings,
+      // Open-only totals for P&L card
+      openTotalValue,
+      openUnclaimedFees,
+      openClaimedFees,
     };
   }, [walletPositions, prices, positionHistories, v4PositionHistories]);
 
@@ -374,28 +404,29 @@ export default function TrackPage() {
   const walletEarnings = unclaimedFees + claimedFees;
   const retentionRate = walletEarnings > 0 ? ((unclaimedFees / walletEarnings) * 100) : 0;
 
-  // Profit/Loss = Total Current Value (position + all fees) - Original Investment
-  // This is the actual capital gain/loss
-  const totalCurrentValue = totalValue + totalEarnings;
-  const profitLoss = totalCurrentValue - totalOriginalInvestment;
+  // Profit/Loss: ONLY open positions
+  // P&L = currentValue - initialDeposit + claimedFees + unclaimedFees
+  const openEarnings = walletPositionsTotals.openUnclaimedFees + walletPositionsTotals.openClaimedFees;
+  const openCurrentValue = walletPositionsTotals.openTotalValue + openEarnings;
+  const profitLoss = openCurrentValue - totalOriginalInvestment;
 
-  // Asset Gain = Position Value Change (not including fees)
-  const assetGain = totalValue - totalOriginalInvestment;
+  // Asset Gain = Position Value Change (not including fees) — open positions only
+  const assetGain = walletPositionsTotals.openTotalValue - totalOriginalInvestment;
 
   // VS HODL: How much better/worse LP is compared to just holding
   // HODL Value = Original deposits valued at current prices
   // Impermanent Loss = HODL Value - Current Position Value (not including fees)
-  const impermanentLoss = totalHodlValue - totalValue;
+  const impermanentLoss = totalHodlValue - walletPositionsTotals.openTotalValue;
   // VS HODL = Earnings - Impermanent Loss
-  const vsHodl = totalEarnings - Math.max(0, impermanentLoss);
+  const vsHodl = openEarnings - Math.max(0, impermanentLoss);
 
-  // ROI: Total profit relative to initial investment
+  // ROI: Total profit relative to initial investment (open positions only)
   const roi = totalOriginalInvestment > 0 ? (profitLoss / totalOriginalInvestment) * 100 : 0;
 
   // APR calculation: uses sum of per-position daily earnings for accurate portfolio yield
   // Each position's daily earnings = (unclaimed + claimed) / positionAgeDays
-  // This avoids distortion from simple average of position ages
-  const aprBase = Math.max(totalValue, 1);
+  // APR base = initial deposit (NOT current value) per business rules
+  const aprBase = Math.max(totalOriginalInvestment, 1);
   const rawApr = (walletPositionsTotals.totalDailyEarnings * 365 / aprBase) * 100;
   // Cap APR at reasonable maximum (10,000%) to prevent display of absurd values from edge cases
   const apr = Math.min(rawApr, 10000);
@@ -412,12 +443,11 @@ export default function TrackPage() {
     positionCount: walletPositions.length,
   });
 
-  // Projections based on APR applied to current liquidity
-  // This projects future earnings based on current yield rate and current capital
-  const dailyYieldRate = apr / 100 / 365; // Daily yield as a decimal
-  const projection24h = totalValue * dailyYieldRate;
-  const projection7d = totalValue * dailyYieldRate * 7;
-  const projection30d = totalValue * dailyYieldRate * 30;
+  // Projections based on actual daily earnings rate (not compound, not derived from APR)
+  // Uses the direct sum of per-position daily earnings for accuracy
+  const projection24h = walletPositionsTotals.totalDailyEarnings;
+  const projection7d = walletPositionsTotals.totalDailyEarnings * 7;
+  const projection30d = walletPositionsTotals.totalDailyEarnings * 30;
 
   // Filter positions based on search and filters
   const filteredPositions = useMemo(() => {
@@ -494,8 +524,47 @@ export default function TrackPage() {
         </div>
       </div>
 
+      {/* Manual Wallet Testing Panel */}
+      <Card className="p-4 mb-4 border border-dashed border-yellow-500/40 bg-yellow-500/5">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Search className="w-4 h-4 text-yellow-400" />
+            <span className="text-sm font-medium text-yellow-400">Test Wallet</span>
+          </div>
+          <div className="flex-1 flex items-center gap-2 w-full sm:w-auto">
+            <input
+              type="text"
+              placeholder="0x... wallet address"
+              value={manualAddress}
+              onChange={(e) => setManualAddress(e.target.value)}
+              className="flex-1 px-3 py-1.5 bg-card border border-border rounded-lg text-sm font-mono focus:outline-none focus:ring-1 focus:ring-yellow-500"
+            />
+            <Button
+              size="sm"
+              variant={useManualAddress ? 'primary' : 'outline'}
+              onClick={() => {
+                if (useManualAddress) {
+                  setUseManualAddress(false);
+                  setManualAddress('');
+                } else if (/^0x[a-fA-F0-9]{40}$/.test(manualAddress)) {
+                  setUseManualAddress(true);
+                }
+              }}
+              className={useManualAddress ? 'bg-yellow-600 hover:bg-yellow-700' : ''}
+            >
+              {useManualAddress ? 'Clear' : 'Load'}
+            </Button>
+          </div>
+          {useManualAddress && manualAddr && (
+            <span className="text-xs text-yellow-400">
+              Viewing: {manualAddr.slice(0, 6)}...{manualAddr.slice(-4)}
+            </span>
+          )}
+        </div>
+      </Card>
+
       {/* Wallet Connection Card */}
-      {!isConnected ? (
+      {!isConnected && !useManualAddress ? (
         <Card className="p-8 mb-6">
           <div className="flex flex-col items-center text-center">
             <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
@@ -582,7 +651,7 @@ export default function TrackPage() {
       )}
 
       {/* Summary Cards - Metrix Finance Style */}
-      {(trackedPositions.length > 0 || walletPositions.length > 0) && isConnected && (
+      {(trackedPositions.length > 0 || walletPositions.length > 0) && (isConnected || useManualAddress) && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
           {/* Current Liquidity */}
           <Card className="p-4">
@@ -680,7 +749,7 @@ export default function TrackPage() {
       )}
 
       {/* Positions Content */}
-      {isConnected && activeTab === 'wallet' && (
+      {(isConnected || useManualAddress) && activeTab === 'wallet' && (
         <div>
           {/* Position Filter Tabs - Opened/Closed/All */}
           <div className="flex items-center justify-between mb-4">
@@ -846,7 +915,7 @@ export default function TrackPage() {
         </div>
       )}
 
-      {isConnected && activeTab === 'v4lookup' && (
+      {(isConnected || useManualAddress) && activeTab === 'v4lookup' && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">V4 Position Lookup</h2>
@@ -856,7 +925,7 @@ export default function TrackPage() {
         </div>
       )}
 
-      {isConnected && activeTab === 'manual' && (
+      {(isConnected || useManualAddress) && activeTab === 'manual' && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">Manually Tracked Positions</h2>
@@ -893,7 +962,7 @@ export default function TrackPage() {
       )}
 
       {/* Fallback for not connected */}
-      {!isConnected && (
+      {!isConnected && !useManualAddress && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">Your Positions</h2>
