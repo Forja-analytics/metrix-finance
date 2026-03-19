@@ -232,19 +232,15 @@ export function WalletPositionCard({ position, prices: externalPrices, positionH
     if (hasDepositData) {
       depositsAtCurrentPrices = (v4PositionHistory.depositedToken0 * token0Price) + (v4PositionHistory.depositedToken1 * token1Price);
       claimedFeesUSD = (v4PositionHistory.claimedToken0 * token0Price) + (v4PositionHistory.claimedToken1 * token1Price);
-      // Use historical USD value if available, otherwise use deposits at current prices
-      originalInvestmentUSD = v4PositionHistory.depositedUSD > 0
-        ? v4PositionHistory.depositedUSD
-        : depositsAtCurrentPrices;
+      // Use deposits at CURRENT prices (HODL basis)
+      originalInvestmentUSD = depositsAtCurrentPrices;
     }
   } else if (!isV4 && positionHistory) {
     // V3: Use The Graph subgraph data
     depositsAtCurrentPrices = (positionHistory.depositedToken0 * token0Price) + (positionHistory.depositedToken1 * token1Price);
     claimedFeesUSD = (positionHistory.claimedFees0 * token0Price) + (positionHistory.claimedFees1 * token1Price);
-    // Use historical USD value if available, otherwise use deposits at current prices
-    originalInvestmentUSD = positionHistory.depositedUSD > 0
-      ? positionHistory.depositedUSD
-      : depositsAtCurrentPrices;
+    // Use deposits at CURRENT prices (HODL basis)
+    originalInvestmentUSD = depositsAtCurrentPrices;
   }
 
   // Total earnings = unclaimed + claimed fees (this position only)
