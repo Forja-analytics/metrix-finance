@@ -14,6 +14,7 @@ interface WalletPositionCardProps {
   prices?: Record<string, number>;
   positionHistory?: PositionHistory | null;
   v4PositionHistory?: V4PositionHistory | null;
+  totalAccumulatedEarnings?: number;
 }
 
 // Format large liquidity values in a human-readable way
@@ -161,7 +162,7 @@ function PriceRangeSlider({ tickLower, tickUpper, currentTick, inRange, token0De
   );
 }
 
-export function WalletPositionCard({ position, prices: externalPrices, positionHistory, v4PositionHistory }: WalletPositionCardProps) {
+export function WalletPositionCard({ position, prices: externalPrices, positionHistory, v4PositionHistory, totalAccumulatedEarnings }: WalletPositionCardProps) {
   // Debug: Log when component renders
   console.log('[WalletPositionCard] Rendering position:', position.tokenId.toString());
 
@@ -246,8 +247,10 @@ export function WalletPositionCard({ position, prices: externalPrices, positionH
       : depositsAtCurrentPrices;
   }
 
-  // Total earnings = unclaimed + claimed fees
-  const earnings = unclaimedFeesUSD + claimedFeesUSD;
+  // Total earnings = unclaimed + claimed fees (this position only)
+  const positionEarnings = unclaimedFeesUSD + claimedFeesUSD;
+  // Use accumulated earnings from all positions if provided (serial rebalancing strategy)
+  const earnings = totalAccumulatedEarnings !== undefined ? totalAccumulatedEarnings : positionEarnings;
 
   // Safety check: ensure originalInvestmentUSD is reasonable for APR calculation
   // Use the HIGHER of: calculated investment OR current position value

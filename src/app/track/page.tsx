@@ -404,23 +404,22 @@ export default function TrackPage() {
   const walletEarnings = unclaimedFees + claimedFees;
   const retentionRate = walletEarnings > 0 ? ((unclaimedFees / walletEarnings) * 100) : 0;
 
-  // Profit/Loss: ONLY open positions
-  // P&L = currentValue - initialDeposit + claimedFees + unclaimedFees
-  const openEarnings = walletPositionsTotals.openUnclaimedFees + walletPositionsTotals.openClaimedFees;
-  const openCurrentValue = walletPositionsTotals.openTotalValue + openEarnings;
-  const profitLoss = openCurrentValue - totalOriginalInvestment;
+  // Profit/Loss = Total Current Value (position + all fees) - Original Investment
+  // Includes ALL earnings (open + closed positions) as accumulated strategy returns
+  const totalCurrentValue = totalValue + totalEarnings;
+  const profitLoss = totalCurrentValue - totalOriginalInvestment;
 
-  // Asset Gain = Position Value Change (not including fees) — open positions only
-  const assetGain = walletPositionsTotals.openTotalValue - totalOriginalInvestment;
+  // Asset Gain = Position Value Change (not including fees)
+  const assetGain = totalValue - totalOriginalInvestment;
 
   // VS HODL: How much better/worse LP is compared to just holding
   // HODL Value = Original deposits valued at current prices
   // Impermanent Loss = HODL Value - Current Position Value (not including fees)
-  const impermanentLoss = totalHodlValue - walletPositionsTotals.openTotalValue;
+  const impermanentLoss = totalHodlValue - totalValue;
   // VS HODL = Earnings - Impermanent Loss
-  const vsHodl = openEarnings - Math.max(0, impermanentLoss);
+  const vsHodl = totalEarnings - Math.max(0, impermanentLoss);
 
-  // ROI: Total profit relative to initial investment (open positions only)
+  // ROI: Total profit relative to initial investment
   const roi = totalOriginalInvestment > 0 ? (profitLoss / totalOriginalInvestment) * 100 : 0;
 
   // APR calculation: uses sum of per-position daily earnings for accurate portfolio yield
@@ -908,6 +907,7 @@ export default function TrackPage() {
                   prices={prices}
                   positionHistory={positionHistories.get(position.tokenId.toString())}
                   v4PositionHistory={v4PositionHistories.get(position.tokenId.toString())}
+                  totalAccumulatedEarnings={totalEarnings}
                 />
               ))}
             </div>
