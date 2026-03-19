@@ -242,14 +242,19 @@ export default function TrackPage() {
           // HODL value = deposits at current prices
           const depositsAtCurrentPrices = (v4History.depositedToken0 * token0Price) + (v4History.depositedToken1 * token1Price);
 
-          // Use deposits at CURRENT prices (HODL basis) — matches reference analytics
-          // This measures LP performance vs simply holding the same tokens
-          const originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+          // Use historical USD value at deposit time if available
+          let originalInvestment = v4History.depositedUSD > 0
+            ? v4History.depositedUSD
+            : depositsAtCurrentPrices;
+
+          if (isNaN(originalInvestment) || originalInvestment < 0) {
+            originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+          }
 
           // Only count deposits for OPEN positions as current investment basis.
           if (!posIsClosed) {
             totalOriginalInvestment += originalInvestment;
-            totalHodlValue += originalInvestment;
+            totalHodlValue += depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
           }
 
           // Add claimed fees from V4 subgraph (for both open and closed positions)
@@ -289,13 +294,19 @@ export default function TrackPage() {
         // HODL value = deposits at current prices
         const depositsAtCurrentPrices = (v3History.depositedToken0 * token0Price) + (v3History.depositedToken1 * token1Price);
 
-        // Use deposits at CURRENT prices (HODL basis) — matches reference analytics
-        const originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+        // Use historical USD value at deposit time if available
+        let originalInvestment = v3History.depositedUSD > 0
+          ? v3History.depositedUSD
+          : depositsAtCurrentPrices;
+
+        if (isNaN(originalInvestment) || originalInvestment < 0) {
+          originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+        }
 
         // Only count deposits for OPEN positions as current investment basis.
         if (!posIsClosed) {
           totalOriginalInvestment += originalInvestment;
-          totalHodlValue += originalInvestment;
+          totalHodlValue += depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
         }
 
         // Claimed fees (count for both open and closed)
