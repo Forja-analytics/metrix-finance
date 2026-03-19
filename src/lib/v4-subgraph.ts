@@ -607,26 +607,14 @@ function calculateDepositsAndClaims(
       depositedUSD += Math.abs(amountUSD);
     } else if (amount0 < 0 || amount1 < 0) {
       // Withdrawal event: removing liquidity
-      // The withdrawn amount may include fees on top of principal
+      // In concentrated liquidity, the token composition changes with price (IL).
+      // We CANNOT reliably separate fees from principal using token amounts alone,
+      // because "excess" tokens are mostly IL rebalancing, not fees.
+      // Real claimed fees are resolved via RPC transaction receipts instead.
       const withdrawn0 = Math.abs(amount0);
       const withdrawn1 = Math.abs(amount1);
-
-      // Estimate how much of the withdrawal is principal vs fees
-      // Principal portion: proportional to remaining deposited amount
-      const remainingDeposit0 = Math.max(0, cumulativeDeposited0 - cumulativeWithdrawn0);
-      const remainingDeposit1 = Math.max(0, cumulativeDeposited1 - cumulativeWithdrawn1);
-
-      const principalPortion0 = Math.min(withdrawn0, remainingDeposit0);
-      const principalPortion1 = Math.min(withdrawn1, remainingDeposit1);
-
-      // Anything beyond the principal is claimed fees
-      const feePortion0 = Math.max(0, withdrawn0 - principalPortion0);
-      const feePortion1 = Math.max(0, withdrawn1 - principalPortion1);
-
-      claimedToken0 += feePortion0;
-      claimedToken1 += feePortion1;
-      cumulativeWithdrawn0 += principalPortion0;
-      cumulativeWithdrawn1 += principalPortion1;
+      cumulativeWithdrawn0 += withdrawn0;
+      cumulativeWithdrawn1 += withdrawn1;
     }
   }
 
@@ -788,9 +776,10 @@ export async function fetchV4PositionsHistory(
         claimedToken0 = calculated.claimedToken0;
         claimedToken1 = calculated.claimedToken1;
 
-        // Step 5: Resolve fee claims with 0 amounts via RPC (V4 subgraph limitation)
-        // V4 fee collections report amount0=0, amount1=0 in ModifyLiquidity events because
-        // the actual token transfer happens in the settle/take step, not modifyLiquidity.
+        // Step 5: Resolve claimed fees via RPC transaction receipts (V4 subgraph limitation)
+        // The V4 subgraph reports amount0=0, amount1=0 for pure fee collections, and
+        // withdrawal amounts conflate principal with fees (IL token rebalancing).
+        // The only reliable source for actual fee amounts is the ERC20 Transfer logs in tx receipts.
         const matchingEvents = modifyEvents.filter((e) => {
           const tickMatch = parseInt(e.tickLower) === tickLower && parseInt(e.tickUpper) === tickUpper;
           if (!tickMatch) return false;
@@ -799,24 +788,27 @@ export async function fetchV4PositionsHistory(
           }
           return true;
         });
-        const zeroAmountClaims = matchingEvents.filter(e => {
+
+        // Only resolve pure fee claims (amount=0) via RPC.
+        // Withdrawals (amount<0) mix principal + fees in a single transfer,
+        // so we can't separate them from Transfer logs alone.
+        const feeRelatedTxs = matchingEvents.filter(e => {
           const liqDelta = parseFloat(e.amount);
           const a0 = parseFloat(e.amount0);
           const a1 = parseFloat(e.amount1);
-          return liqDelta === 0 && a0 === 0 && a1 === 0;
+          return liqDelta === 0 && a0 === 0 && a1 === 0; // pure fee claims only
         });
 
-        if (zeroAmountClaims.length > 0) {
-          // Get token addresses from pool data in events
+        if (feeRelatedTxs.length > 0) {
           const poolEvent = matchingEvents.find(e => e.pool?.token0?.id && e.pool?.token1?.id);
           if (poolEvent?.pool?.token0 && poolEvent?.pool?.token1) {
             const t0Addr = poolEvent.pool.token0.id;
             const t1Addr = poolEvent.pool.token1.id;
             const t0Dec = parseInt(poolEvent.pool.token0.decimals) || 18;
             const t1Dec = parseInt(poolEvent.pool.token1.decimals) || 18;
-            const txHashes = zeroAmountClaims.map(e => e.transaction.id);
+            const txHashes = feeRelatedTxs.map(e => e.transaction.id);
 
-            console.log(`[V4] Position ${tokenId}: ${zeroAmountClaims.length} fee claims with 0 amounts, resolving via RPC...`);
+            console.log(`[V4] Position ${tokenId}: resolving fees from ${feeRelatedTxs.length} txs via RPC...`);
             const rpcFees = await fetchClaimedFeesFromRPC(txHashes, ownerAddress, t0Addr, t1Addr, t0Dec, t1Dec);
             claimedToken0 += rpcFees.claimedToken0;
             claimedToken1 += rpcFees.claimedToken1;
