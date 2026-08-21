@@ -287,27 +287,19 @@ export function WalletPositionCard({ position, prices: externalPrices, positionH
   const positionAgeDays = Math.max(1, rawPositionAgeDays);
 
   // APR = (earnings / days) * 365 / current liquidity * 100
-  // Use current liquidity value for APR (yield rate on current capital)
-  // Cap APR at reasonable maximum (10,000%) to prevent display of absurd values from edge cases
-  const aprBase = Math.max(totalValueUSD, 1);
-  const rawApr = ((earnings / positionAgeDays) * 365 / aprBase) * 100;
-  const apr = Math.min(rawApr, 10000); // Cap at 10,000% APR
+  // APR only meaningful when position has value; closed positions (value=0) get APR=0
+  const apr = totalValueUSD > 0
+    ? Math.min(((earnings / positionAgeDays) * 365 / totalValueUSD) * 100, 10000)
+    : 0;
 
-  // Debug logging (remove in production)
+  // Debug logging
   console.log('[WalletPositionCard] APR Calculation:', {
     tokenId: position.tokenId.toString(),
     version: position.version,
     totalValueUSD,
-    aprBase,
     earnings,
-    unclaimedFeesUSD,
-    claimedFeesUSD,
-    hasV4History: !!v4PositionHistory,
-    hasV3History: !!positionHistory,
-    createdTimestamp,
     positionAgeDays,
-    rawApr,
-    cappedApr: apr,
+    apr,
   });
 
   // Format opened date from position history

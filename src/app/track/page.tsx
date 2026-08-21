@@ -174,198 +174,105 @@ export default function TrackPage() {
     addTrackedPosition(position);
   };
 
-  // Calculate wallet positions value and fees (V3 + V4)
+  // Filter positions based on search and filters — MUST be before KPI calculation
+  const filteredPositions = useMemo(() => {
+    return walletPositions.filter(pos => {
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch =
+          (pos.token0Symbol?.toLowerCase().includes(query)) ||
+          (pos.token1Symbol?.toLowerCase().includes(query)) ||
+          pos.tokenId.toString().includes(query);
+        if (!matchesSearch) return false;
+      }
+      if (networkFilter !== 'all' && pos.chainName?.toLowerCase() !== networkFilter.toLowerCase()) return false;
+      if (exchangeFilter !== 'all') {
+        if (exchangeFilter === 'v3' && pos.version !== 'v3') return false;
+        if (exchangeFilter === 'v4' && pos.version !== 'v4') return false;
+      }
+      if (positionFilter === 'opened' && Number(pos.liquidity) === 0) return false;
+      if (positionFilter === 'closed' && Number(pos.liquidity) > 0) return false;
+      return true;
+    });
+  }, [walletPositions, searchQuery, networkFilter, exchangeFilter, positionFilter]);
+
+  // KPIs computed from FILTERED positions — reacts to Opened/Closed/All tab
   const walletPositionsTotals = useMemo(() => {
     let totalValue = 0;
-    let totalOriginalInvestment = 0; // Historical USD value at deposit time (for P&L)
+    let totalOriginalInvestment = 0;
     let totalUnclaimedFees = 0;
     let totalClaimedFees = 0;
-    let v3Count = 0;
-    let v4Count = 0;
+    let totalHodlValue = 0;
     let oldestPositionTimestamp = Date.now();
-    let totalPositionAgeDays = 0;
-    let totalHodlValue = 0; // Deposits valued at current prices (for HODL/IL calc)
-    let totalDailyEarnings = 0; // Sum of per-position daily earnings for accurate portfolio APR
 
-    // Open-only totals for P&L card (closed positions should not affect P&L)
-    let openTotalValue = 0;
-    let openUnclaimedFees = 0;
-    let openClaimedFees = 0;
-
-    // Track oldest OPEN position timestamp (for APR and projections)
-    let oldestOpenTimestamp = Date.now();
-
-    walletPositions.forEach(pos => {
+    filteredPositions.forEach(pos => {
       const token0Symbol = pos.token0Symbol || 'ETH';
       const token1Symbol = pos.token1Symbol || '';
       const token0Price = prices[token0Symbol] || prices['ETH'] || 0;
       const token1Price = prices[token1Symbol] || 0;
-
       const token0Amount = pos.token0Amount || 0;
       const token1Amount = pos.token1Amount || 0;
 
       const positionValue = (token0Amount * token0Price) + (token1Amount * token1Price);
       totalValue += positionValue;
 
-      // Determine if position is closed (no liquidity)
-      const posIsClosed = pos.isClosed || pos.liquidity === 0n;
-
-      // Count position types
-      if (pos.version === 'v4') {
-        v4Count++;
-      } else {
-        v3Count++;
-      }
-
-      // Use pre-calculated uncollected fees (works for both V3 and V4)
+      // Uncollected fees
       const uncollectedFees0 = pos.uncollectedFees0 || 0;
       const uncollectedFees1 = pos.uncollectedFees1 || 0;
-      const posUnclaimedFeesUSD = (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
-      totalUnclaimedFees += posUnclaimedFeesUSD;
+      totalUnclaimedFees += (uncollectedFees0 * token0Price) + (uncollectedFees1 * token1Price);
 
-      // Track open-only totals for P&L card
-      if (!posIsClosed) {
-        openTotalValue += positionValue;
-        openUnclaimedFees += posUnclaimedFeesUSD;
-      }
+      const posIsClosed = pos.isClosed || pos.liquidity === 0n;
 
-      // Get historical data - use V3 subgraph for V3, V4 subgraph for V4
+      // Historical data
       const isV4 = pos.version === 'v4';
       const v3History = positionHistories.get(pos.tokenId.toString());
       const v4History = v4PositionHistories.get(pos.tokenId.toString());
 
       if (isV4 && v4History) {
-        // V4 position with history from V4 subgraph (ModifyLiquidity events)
         const hasDepositData = v4History.depositedToken0 > 0 || v4History.depositedToken1 > 0;
-
         if (hasDepositData) {
-          // HODL value = deposits at current prices
           const depositsAtCurrentPrices = (v4History.depositedToken0 * token0Price) + (v4History.depositedToken1 * token1Price);
-
-          // Use historical USD value at deposit time if available
-          let originalInvestment = v4History.depositedUSD > 0
-            ? v4History.depositedUSD
-            : depositsAtCurrentPrices;
-
-          if (isNaN(originalInvestment) || originalInvestment < 0) {
-            originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
-          }
-
-          // Only count deposits for OPEN positions as current investment basis.
+          let originalInvestment = v4History.depositedUSD > 0 ? v4History.depositedUSD : depositsAtCurrentPrices;
+          if (isNaN(originalInvestment) || originalInvestment < 0) originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
+          // Only count deposits for OPEN positions — serial rebalances reuse the same capital
           if (!posIsClosed) {
             totalOriginalInvestment += originalInvestment;
             totalHodlValue += depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
           }
-
-          // Add claimed fees from V4 subgraph (for both open and closed positions)
-          const v4ClaimedUSD = (v4History.claimedToken0 * token0Price) + (v4History.claimedToken1 * token1Price);
-          totalClaimedFees += v4ClaimedUSD;
-          if (!posIsClosed) openClaimedFees += v4ClaimedUSD;
+          totalClaimedFees += (v4History.claimedToken0 * token0Price) + (v4History.claimedToken1 * token1Price);
         } else {
-          // Fallback to current value if no deposit data (only for open positions)
           if (!posIsClosed) {
             totalOriginalInvestment += positionValue > 0 ? positionValue : 0;
             totalHodlValue += positionValue > 0 ? positionValue : 0;
           }
         }
 
-        // Track position age from mint transaction
-        // Validate timestamp is valid (positive and in the past)
         const now = Date.now();
-        const validTimestamp = v4History.createdTimestamp > 0 && v4History.createdTimestamp < now
-          ? v4History.createdTimestamp
-          : null;
-
-        if (validTimestamp && validTimestamp < oldestPositionTimestamp) {
-          oldestPositionTimestamp = validTimestamp;
-        }
-        if (!posIsClosed && validTimestamp && validTimestamp < oldestOpenTimestamp) {
-          oldestOpenTimestamp = validTimestamp;
-        }
-
-        // Calculate position age, with minimum 1 day per position to prevent APR inflation
-        const rawAgeDays = validTimestamp
-          ? (now - validTimestamp) / (1000 * 60 * 60 * 24)
-          : 30; // Default to 30 days if no valid timestamp
-        const positionAgeDays = Math.max(1, rawAgeDays); // Minimum 1 day per position
-        totalPositionAgeDays += positionAgeDays;
+        const validTimestamp = v4History.createdTimestamp > 0 && v4History.createdTimestamp < now ? v4History.createdTimestamp : null;
+        if (validTimestamp && validTimestamp < oldestPositionTimestamp) oldestPositionTimestamp = validTimestamp;
       } else if (!isV4 && v3History) {
-        // V3 position with history from The Graph
-        // HODL value = deposits at current prices
         const depositsAtCurrentPrices = (v3History.depositedToken0 * token0Price) + (v3History.depositedToken1 * token1Price);
-
-        // Use historical USD value at deposit time if available
-        let originalInvestment = v3History.depositedUSD > 0
-          ? v3History.depositedUSD
-          : depositsAtCurrentPrices;
-
-        if (isNaN(originalInvestment) || originalInvestment < 0) {
-          originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
-        }
-
-        // Only count deposits for OPEN positions as current investment basis.
+        let originalInvestment = v3History.depositedUSD > 0 ? v3History.depositedUSD : depositsAtCurrentPrices;
+        if (isNaN(originalInvestment) || originalInvestment < 0) originalInvestment = depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
         if (!posIsClosed) {
           totalOriginalInvestment += originalInvestment;
           totalHodlValue += depositsAtCurrentPrices > 0 ? depositsAtCurrentPrices : positionValue;
         }
+        totalClaimedFees += (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
 
-        // Claimed fees (count for both open and closed)
-        const v3ClaimedUSD = (v3History.claimedFees0 * token0Price) + (v3History.claimedFees1 * token1Price);
-        totalClaimedFees += v3ClaimedUSD;
-        if (!posIsClosed) openClaimedFees += v3ClaimedUSD;
-
-        // Track position age - validate timestamp is valid
         const now = Date.now();
-        const validTimestamp = v3History.createdTimestamp > 0 && v3History.createdTimestamp < now
-          ? v3History.createdTimestamp
-          : null;
-
-        if (validTimestamp && validTimestamp < oldestPositionTimestamp) {
-          oldestPositionTimestamp = validTimestamp;
-        }
-        if (!posIsClosed && validTimestamp && validTimestamp < oldestOpenTimestamp) {
-          oldestOpenTimestamp = validTimestamp;
-        }
-
-        // Calculate position age, with minimum 1 day per position to prevent APR inflation
-        const rawAgeDays = validTimestamp
-          ? (now - validTimestamp) / (1000 * 60 * 60 * 24)
-          : 30; // Default to 30 days if no valid timestamp
-        const positionAgeDays = Math.max(1, rawAgeDays); // Minimum 1 day per position
-        totalPositionAgeDays += positionAgeDays;
+        const validTimestamp = v3History.createdTimestamp > 0 && v3History.createdTimestamp < now ? v3History.createdTimestamp : null;
+        if (validTimestamp && validTimestamp < oldestPositionTimestamp) oldestPositionTimestamp = validTimestamp;
       } else {
-        // No history available - estimate deposits as current value (only for open positions)
         if (!posIsClosed) {
           totalOriginalInvestment += positionValue;
           totalHodlValue += positionValue;
         }
-
-        // No history — cannot contribute to daily earnings calculation
       }
     });
 
-    const avgPositionAgeDays = walletPositions.length > 0 && totalPositionAgeDays > 0
-      ? totalPositionAgeDays / walletPositions.length
-      : 30;
-
-    return {
-      totalValue,
-      totalOriginalInvestment,
-      totalUnclaimedFees,
-      totalClaimedFees,
-      totalHodlValue,
-      v3Count,
-      v4Count,
-      oldestPositionTimestamp,
-      avgPositionAgeDays,
-      totalDailyEarnings,
-      // Open-only totals for P&L card
-      openTotalValue,
-      openUnclaimedFees,
-      openClaimedFees,
-      oldestOpenTimestamp,
-    };
-  }, [walletPositions, prices, positionHistories, v4PositionHistories]);
+    return { totalValue, totalOriginalInvestment, totalUnclaimedFees, totalClaimedFees, totalHodlValue, oldestPositionTimestamp };
+  }, [filteredPositions, prices, positionHistories, v4PositionHistories]);
 
   // Manual positions totals
   const manualTotalValue = trackedPositions.reduce((acc, p) => acc + p.currentValueUSD, 0);
@@ -377,105 +284,42 @@ export default function TrackPage() {
   const totalOriginalInvestment = walletPositionsTotals.totalOriginalInvestment + manualTotalDeposits;
   const totalHodlValue = walletPositionsTotals.totalHodlValue + manualTotalDeposits;
 
-  // Detect if historical earnings data is missing (subgraph unavailable)
+  // Detect if historical earnings data is missing
   const historyDataMissing = walletPositions.length > 0 && (
     (historyFetchStatus.v3Success === false && walletPositions.some(p => p.version !== 'v4')) ||
     (historyFetchStatus.v4Success === false && walletPositions.some(p => p.version === 'v4'))
   );
 
-  // Earnings breakdown with real claimed fees from The Graph
-  // Manual fees are total fees (no unclaimed/claimed split), kept separate for correct retention
+  // Earnings
   const unclaimedFees = walletPositionsTotals.totalUnclaimedFees;
   const claimedFees = walletPositionsTotals.totalClaimedFees;
   const totalEarnings = unclaimedFees + claimedFees + manualTotalFees;
-
-  // Retention rate: percentage of wallet earnings that are still unclaimed
-  // Only wallet positions have unclaimed/claimed distinction, manual fees excluded
   const walletEarnings = unclaimedFees + claimedFees;
   const retentionRate = walletEarnings > 0 ? ((unclaimedFees / walletEarnings) * 100) : 0;
 
-  // Profit/Loss = Total Current Value (position + all fees) - Original Investment
-  // Includes ALL earnings (open + closed positions) as accumulated strategy returns
-  const totalCurrentValue = totalValue + totalEarnings;
-  const profitLoss = totalCurrentValue - totalOriginalInvestment;
-
-  // Asset Gain = Position Value Change (not including fees)
+  // P&L = currentValue + totalEarnings - deposits
+  const profitLoss = totalValue + totalEarnings - totalOriginalInvestment;
   const assetGain = totalValue - totalOriginalInvestment;
 
-  // VS HODL: How much better/worse LP is compared to just holding
-  // HODL Value = Original deposits valued at current prices
-  // Impermanent Loss = HODL Value - Current Position Value (not including fees)
+  // VS HODL
   const impermanentLoss = totalHodlValue - totalValue;
-  // VS HODL = Earnings - Impermanent Loss
   const vsHodl = totalEarnings - Math.max(0, impermanentLoss);
 
-  // ROI: Total profit relative to initial investment
+  // ROI
   const roi = totalOriginalInvestment > 0 ? (profitLoss / totalOriginalInvestment) * 100 : 0;
 
-  // APR = (totalEarnings / openPositionAge) * 365 / currentValue * 100
-  // Uses age of oldest OPEN position as the earnings window
-  const openPositionAgeDays = Math.max(1, (Date.now() - walletPositionsTotals.oldestOpenTimestamp) / (1000 * 60 * 60 * 24));
-  const dailyEarningsRate = totalEarnings / openPositionAgeDays;
-  const aprBase = Math.max(totalValue, 1);
-  const rawApr = (dailyEarningsRate * 365 / aprBase) * 100;
-  const apr = Math.min(rawApr, 10000);
+  // APR = (totalEarnings / positionAge) * 365 / currentValue * 100
+  const positionAgeDays = Math.max(1, (Date.now() - walletPositionsTotals.oldestPositionTimestamp) / (1000 * 60 * 60 * 24));
+  const dailyEarningsRate = totalEarnings / positionAgeDays;
+  // APR only meaningful when there's actual liquidity value; 0 value = 0 APR
+  const apr = totalValue > 0
+    ? Math.min((dailyEarningsRate * 365 / totalValue) * 100, 10000)
+    : 0;
 
-  // Debug logging
-  console.log('[Track Page] Portfolio APR Calculation:', {
-    totalValue,
-    totalOriginalInvestment,
-    aprBase,
-    totalEarnings,
-    totalDailyEarnings: walletPositionsTotals.totalDailyEarnings,
-    rawApr,
-    cappedApr: apr,
-    positionCount: walletPositions.length,
-  });
-
-  // Projections based on daily earnings rate (totalEarnings / openPositionAge)
+  // Projections
   const projection24h = dailyEarningsRate;
   const projection7d = dailyEarningsRate * 7;
   const projection30d = dailyEarningsRate * 30;
-
-  // Filter positions based on search and filters
-  const filteredPositions = useMemo(() => {
-    return walletPositions.filter(pos => {
-      // Search filter
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase();
-        const matchesSearch =
-          (pos.token0Symbol?.toLowerCase().includes(query)) ||
-          (pos.token1Symbol?.toLowerCase().includes(query)) ||
-          pos.tokenId.toString().includes(query);
-        if (!matchesSearch) return false;
-      }
-
-      // Network filter
-      if (networkFilter !== 'all' && pos.chainName?.toLowerCase() !== networkFilter.toLowerCase()) {
-        return false;
-      }
-
-      // Exchange filter (V3/V4)
-      if (exchangeFilter !== 'all') {
-        if (exchangeFilter === 'v3' && pos.version !== 'v3') return false;
-        if (exchangeFilter === 'v4' && pos.version !== 'v4') return false;
-      }
-
-      // Position filter (opened = has liquidity, closed = no liquidity)
-      if (positionFilter === 'opened' && Number(pos.liquidity) === 0) return false;
-      if (positionFilter === 'closed' && Number(pos.liquidity) > 0) return false;
-
-      return true;
-    });
-  }, [walletPositions, searchQuery, networkFilter, exchangeFilter, positionFilter]);
-
-  // Debug: Log filtered positions
-  console.log('[Track Page] Positions filter:', {
-    totalPositions: walletPositions.length,
-    filteredPositions: filteredPositions.length,
-    positionFilter,
-    positions: filteredPositions.map(p => ({ id: p.tokenId.toString(), liquidity: p.liquidity.toString() })),
-  });
 
   // Get unique networks for filter dropdown
   const uniqueNetworks = useMemo(() => {
@@ -896,7 +740,7 @@ export default function TrackPage() {
                   prices={prices}
                   positionHistory={positionHistories.get(position.tokenId.toString())}
                   v4PositionHistory={v4PositionHistories.get(position.tokenId.toString())}
-                  totalAccumulatedEarnings={totalEarnings}
+                  totalAccumulatedEarnings={Number(position.liquidity) > 0 ? totalEarnings : undefined}
                 />
               ))}
             </div>
